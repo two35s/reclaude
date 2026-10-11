@@ -90,19 +90,15 @@ class CredentialManager:
         if not self.session_key:
             print("[!] Warning: no sessionKey found in cookies")
 
-    # ── Auto-fetch via real Chrome + CDP ───────────────────
+    # ── Auto-fetch via real Chrome + CDP (stdlib, no playwright) ─
 
     def auto_fetch(self):
         """Launch REAL Chrome → user passes CF & logs in → extract creds via CDP → close Chrome."""
+        from . import cdp as cdp_mod
+
         chrome = chrome_mod.find_chrome()
         if not chrome:
             print("[!] Chrome not found. Use --manual instead.")
-            return False
-
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            print("[!] pip install playwright")
             return False
 
         print("\n  ⚠  WARNING: This uses your authenticated browser session.")
@@ -135,59 +131,36 @@ class CredentialManager:
                 self.conv_id = m.group(1)
                 print(f"[+] conv_id: {self.conv_id}")
 
-        # Connect via CDP to extract cookies + org_id
+        # Connect via CDP to extract cookies + org_id (stdlib client)
         print("[*] Connecting to Chrome via CDP to extract cookies...")
-        pw = sync_playwright().start()
         try:
-            browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{cdp_port}")
-            ctx = browser.contexts[0]
-
-            # Extract cookies
-            browser_cookies = ctx.cookies("https://claude.ai")
-            self.cookies = {}
-            for c in browser_cookies:
-                self.cookies[c["name"]] = c["value"]
-                if c["name"] == "sessionKey":
-                    self.session_key = c["value"]
-
-            # Extract org_id by calling Claude's API from the browser page
-            for page in ctx.pages:
-                if "claude.ai" not in page.url:
-                    continue
-                try:
-                    orgs = page.evaluate("""
-                        async () => {
-                            try {
-                                const r = await fetch('/api/organizations');
-                                const data = await r.json();
-                                return data;
-                            } catch(e) { return null; }
-                        }
-                    """)
-                    if orgs and isinstance(orgs, list) and len(orgs) > 0:
-                        self.org_id = orgs[0].get("uuid") or orgs[0].get("id")
-                        print(f"[+] org_id: {self.org_id}")
-                        break
-                except Exception:
-                    pass
-
-            # Fallback conv_id from page URL
-            if not self.conv_id:
-                for page in ctx.pages:
-                    m = re.search(r'/chat/([a-f0-9\-]+)', page.url)
-                    if m:
-                        self.conv_id = m.group(1)
-                        break
-
-            browser.close()
+            cookies, page_url = cdp_mod.extract_session(cdp_port)
         except Exception as e:
             print(f"[!] CDP connection failed: {e}")
             print("    Make sure Chrome is still open.")
-            pw.stop()
             proc.terminate()
             return False
 
-        pw.stop()
+        self.cookies = {}
+        for name, value in cookies.items():
+            self.cookies[name] = value
+            if name == "sessionKey":
+                self.session_key = value
+
+        # Extract org_id by calling Claude's API from the browser page
+        try:
+            orgs = cdp_mod.fetch_orgs(cdp_port)
+            if orgs and isinstance(orgs, list) and len(orgs) > 0:
+                self.org_id = orgs[0].get("uuid") or orgs[0].get("id")
+                print(f"[+] org_id: {self.org_id}")
+        except Exception:
+            pass
+
+        # Fallback conv_id from page URL
+        if not self.conv_id and page_url:
+            m = re.search(r'/chat/([a-f0-9\-]+)', page_url)
+            if m:
+                self.conv_id = m.group(1)
 
         if not self.conv_id:
             self.conv_id = str(uuid.uuid4())

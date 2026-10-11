@@ -45,6 +45,21 @@ def get_free_port():
         return s.getsockname()[1]
 
 
+def _wait_for_cdp(cdp_port, timeout=30):
+    """Poll /json/version until DevTools answers or timeout."""
+    import urllib.request
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{cdp_port}/json/version",
+                                        timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+
 def launch_real_chrome(chrome_path, url="https://claude.ai"):
     """Launch a real Chrome process with remote debugging.
 
@@ -66,7 +81,10 @@ def launch_real_chrome(chrome_path, url="https://claude.ai"):
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print(f"[+] Real Chrome launched (PID {proc.pid}, CDP 127.0.0.1:{cdp_port})")
-        time.sleep(3)
+        if not _wait_for_cdp(cdp_port):
+            print("[!] Chrome DevTools port did not open in time.")
+            proc.terminate()
+            return None, 0
         return proc, cdp_port
     except Exception as e:
         print(f"[!] Failed to launch Chrome: {e}")

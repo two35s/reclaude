@@ -110,6 +110,7 @@ reclaude/
 │   ├── config.py     # paths, UA, models, payload template
 │   ├── timezone.py   # IANA timezone detection
 │   ├── creds.py      # CredentialManager
+│   ├── cdp.py        # stdlib-only CDP client (no playwright needed)
 │   ├── chrome.py     # real-Chrome launch / login
 │   ├── payload.py    # per-request payload builder
 │   ├── http.py       # session reuse, retries, model discovery
