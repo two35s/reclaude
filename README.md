@@ -78,13 +78,22 @@ python -m claude_re --clear-session          # wipe stored credentials
 
 | Shortcut | Full name | Tier |
 |---|---|---|
-| `haiku` | `claude-haiku-4-5` | free |
-| `sonnet` | `claude-sonnet-4-6` (default) | free |
+| `haiku` | `claude-haiku-5-5` (default cheap) | free |
+| `sonnet` | `claude-sonnet-5-5` (default) | free |
+| `sonnet-5` | `claude-sonnet-5` | free |
+| `haiku-4-5` | `claude-haiku-4-5` | free |
+| `sonnet-4-6` | `claude-sonnet-4-6` | free |
 | `sonnet-4-5` | `claude-sonnet-4-5` | free |
 | `haiku-snap` | `claude-haiku-4-5-20251001` | free |
 | `sonnet-snap` | `claude-sonnet-4-5-20250929` | free |
-| `opus` | `claude-opus-4-7` | pro/max |
+| `opus` | `claude-opus-5-5` | pro/max |
+| `opus-5` | `claude-opus-5` | pro/max |
+| `opus-4-8` | `claude-opus-4-8` | pro/max |
+| `opus-4-7` | `claude-opus-4-7` | pro/max |
+| `opus-4-6` | `claude-opus-4-6` | pro/max |
 | `opus-3` | `claude-3-opus-20240229` | pro/max |
+| `fable` | `claude-fable-5-1` | pro/specialized |
+| `mythos` | `claude-mythos-5-1` | pro/specialized |
 
 Unknown names pass through as-is. On 429 the client falls back to Haiku once, then waits per `Retry-After` (with jitter, bounded retries).
 

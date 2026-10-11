@@ -204,9 +204,10 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
     print(f"\n[!] Rate limited. Retry after: {retry}s")
 
     # Auto-fallback to haiku if not already on it (single hop, keep session)
-    if model != "claude-haiku-4-5" and model != MODEL_ALIASES.get("haiku"):
+    haiku_id = MODEL_ALIASES.get("haiku", "claude-haiku-5-5")
+    if model != haiku_id:
         print("[*] Falling back to haiku...")
-        return stream_prompt(creds, prompt, "claude-haiku-4-5", stealth,
+        return stream_prompt(creds, prompt, haiku_id, stealth,
                              session_state)
 
     # Already on haiku — wait with jitter and retry (bounded)

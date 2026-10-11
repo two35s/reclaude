@@ -20,21 +20,32 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
 # Match TLS fingerprint to declared UA (Chrome 136) — avoids UA/TLS mismatch.
 IMPERSONATE_TARGET = "chrome136"
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5-5"
 
-# Verified models (tested against claude.ai endpoint 2026-04-24)
-# FREE = works on free tier, PRO = needs Pro/Max subscription
+# Model IDs mirror api anthropic naming (claude-<family>-<version>).
+# Tier labels are best-effort: FREE = historically usable on free tier,
+# PRO = needs Pro/Max. Verify with `/models refresh` — server discovery wins.
 MODEL_ALIASES = {
-    # ── Current generation (FREE) ─────────────
-    "haiku":        "claude-haiku-4-5",
-    "sonnet":       "claude-sonnet-4-6",          # latest, default
+    # ── Current generation ────────────────────
+    "haiku":        "claude-haiku-5-5",
+    "sonnet":       "claude-sonnet-5-5",          # latest, default
+    "sonnet-5":     "claude-sonnet-5",
+    "opus":         "claude-opus-5-5",
+    "opus-5":       "claude-opus-5",
+    # ── Previous generation ───────────────────
+    "haiku-4-5":    "claude-haiku-4-5",
+    "sonnet-4-6":   "claude-sonnet-4-6",
     "sonnet-4-5":   "claude-sonnet-4-5",          # previous sonnet
-    # ── Dated snapshots (FREE) ────────────────
+    "opus-4-8":     "claude-opus-4-8",
+    "opus-4-7":     "claude-opus-4-7",
+    "opus-4-6":     "claude-opus-4-6",
+    # ── Dated snapshots ───────────────────────
     "haiku-snap":   "claude-haiku-4-5-20251001",
     "sonnet-snap":  "claude-sonnet-4-5-20250929",
-    # ── Premium (PRO/MAX only) ────────────────
-    "opus":         "claude-opus-4-7",
+    # ── Premium / specialized ─────────────────
     "opus-3":       "claude-3-opus-20240229",
+    "fable":        "claude-fable-5-1",
+    "mythos":       "claude-mythos-5-1",
 }
 
 

@@ -25,6 +25,6 @@ def print_models(current, aliases=None):
     print("\n  Available models:")
     for alias, full in aliases.items():
         marker = " <--" if full == current else ""
-        tier = "PRO" if "opus" in alias else "FREE"
+        tier = "PRO" if any(k in alias for k in ("opus", "fable", "mythos")) else "FREE"
         print(f"    {alias:14s}  {full:36s}  [{tier}]{marker}")
     print()
