@@ -75,10 +75,11 @@ def wrap(text, width):
 def msg_lines(role, text, width, streaming=False):
     """Render one message to [(text, kind)] lines. Pure; tested."""
     body = text + ("▌" if streaming else "")
-    if role == "user":
-        return [(f"> {ln}", "user") for ln in wrap(body, width - 2)]
     if role == "note":
         return [(f"({ln})", "dim") for ln in wrap(body, width - 2)]
+    if role == "user":
+        lines = wrap(body, width - 2)
+        return [(("> " if i == 0 else "  ") + ln, "user") for i, ln in enumerate(lines)]
     return [(ln, "") for ln in wrap(body, width)]
 
 
@@ -267,6 +268,7 @@ class App:
         maxw = max(1, w - 6)
         start = max(0, self.cur - maxw + 1)
         if compact:                       # short screen: prompt line only
+            scr.addstr(h - 2, 0, " " * (w - 1))
             scr.addstr(h - 2, 0, "> ", self.attr("user") | curses.A_BOLD)
             scr.addstr(h - 2, 2, self.buf[start:start + maxw])
             if not self.buf and not self.busy:
@@ -282,6 +284,7 @@ class App:
         frame_top, frame_bot = box_frame(w, "message", f"{self.model} · {state}")
         scr.addstr(top, 0, frame_top, self.attr("dim"))
         scr.addstr(bot, 0, frame_bot, self.attr("dim"))
+        scr.addstr(mid, 0, " " * (w - 1))  # clear stale chars first
         scr.addstr(mid, 0, "│", self.attr("dim"))
         scr.addstr(mid, w - 1, "│", self.attr("dim"))
         scr.addstr(mid, 2, "> ", self.attr("user") | curses.A_BOLD)

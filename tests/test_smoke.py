@@ -86,6 +86,12 @@ class TuiTextTest(unittest.TestCase):
         note = msg_lines("note", "model: sonnet (x)", 40)
         self.assertEqual(note, [("(model: sonnet (x))", "dim")])
 
+    def test_msg_lines_continuation_indents(self):
+        lines = msg_lines("user", "aa bb cc dd ee", 12)
+        self.assertTrue(lines[0][0].startswith("> "))
+        self.assertTrue(all(t.startswith("  ") for t, _ in lines[1:]))
+        self.assertTrue(all(len(t) <= 12 for t, _ in lines))
+
     def test_box_frame_width_and_label_sides(self):
         top, bot = box_frame(30, "message", "sonnet · live")
         self.assertEqual((len(top), len(bot)), (30, 30))
