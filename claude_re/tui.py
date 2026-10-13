@@ -1,13 +1,14 @@
 """opencode-style chat TUI for the Claude.ai RE client.
 
-Runs the same streaming backend as the CLI, but inside a full-screen interface
-shaped like opencode's chat page: a header bar, a scrolling message stream, a
-composer, a keybind footer, and overlay dialogs for models / chats / help.
+Mirrors opencode's session view: a session tab strip on top, a message stream
+with a right-hand Context sidebar, a boxed composer (┃ … ╹▀▀▀) with placeholder
+and a `Build · model` status row, and a footer showing `~/dir:branch` and the
+keybinds. Same streaming backend as the CLI; the request runs in a worker thread
+and hands tokens back through a queue so the UI never blocks.
 
     .venv/bin/python -m claude_re --tui
 
-Standard library only (curses + threading). The network call runs in a worker
-thread and hands tokens back through a queue, so the UI never blocks.
+Standard library only (curses + threading).
 """
 import contextlib
 import curses
@@ -16,11 +17,46 @@ import os
 import queue
 import threading
 
-from .config import MODEL_ALIASES
 from . import http as http_mod
+from .config import MODEL_ALIASES
 from .streaming import stream_prompt
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# opencode palette (RGB), approximated with the 256-colour cube below.
+BASE = 233          # #121212  background
+PANEL = 236         # #303030  composer / dialog background
+TEXT = 255          # #eeeeee
+DIM = 245           # #8a8a8a
+GREEN = 114         # #87d787  additions / success
+RED = 204           # #ff5f87  errors
+PURPLE = 141        # #af87ff  reasoning
+WARM = 180          # #d7af87  accents / logo
+
+# 3-row block font for the empty-state word.
+GLYPHS = {
+    "r": ["█▀▄", "█▀▄", "▀ ▀"],
+    "e": ["█▀▀", "██▄", "▀▀▀"],
+    "c": ["█▀▀", "█  ", "▀▀▀"],
+    "l": ["█  ", "█  ", "▀▀▀"],
+    "a": ["█▀█", "█▀█", "▀ ▀"],
+    "u": ["█ █", "█ █", "▀▀▀"],
+    "d": ["█▄▄", "█ █", "▀▀▀"],
+    "n": ["█▀█", "█ █", "▀ ▀"],
+    "o": ["█▀█", "█ █", "▀▀▀"],
+}
+
+
+def block_word(word):
+    """Render `word` (only letters present in GLYPHS) as 3 rows of block text."""
+    rows = ["", "", ""]
+    for i, ch in enumerate(word):
+        g = GLYPHS.get(ch)
+        if not g:
+            continue
+        for r in range(3):
+            rows[r] += ("" if i == 0 else " ") + g[r]
+    return rows
 
 
 # ── model objects ────────────────────────────────────────────────────
@@ -37,14 +73,14 @@ class Msg:
 class Chat:
     """One conversation: its own model, server conversation id and messages."""
 
-    def __init__(self, model, title="new chat"):
+    def __init__(self, model, title="New session"):
         self.model = model
         self.title = title
         self.state = {}          # session_state passed to stream_prompt
         self.messages = []
 
 
-# ── pure rendering helpers (no curses, so they are testable) ─────────
+# ── pure rendering helpers (testable without curses) ─────────────────
 
 def trunc(s, n):
     s = str(s)
@@ -78,7 +114,7 @@ def render_messages(chat, width):
     for m in chat.messages:
         if m.role == "user":
             for ln in wrap(m.text, width):
-                lines.append(("  ┃ " + ln, "user"))
+                lines.append(("┃ " + ln, "user"))
         elif m.role == "assistant":
             body = m.text + ("▌" if m.streaming else "")
             for ln in wrap(body, width):
@@ -90,9 +126,27 @@ def render_messages(chat, width):
     return lines
 
 
+def cwd_label():
+    cwd = os.getcwd()
+    home = os.path.expanduser("~")
+    if cwd.startswith(home):
+        cwd = "~" + cwd[len(home):]
+    branch = ""
+    try:
+        with open(os.path.join(os.getcwd(), ".git", "HEAD")) as f:
+            head = f.read().strip()
+        if head.startswith("ref: refs/heads/"):
+            branch = head[len("ref: refs/heads/"):]
+    except OSError:
+        pass
+    return f"{cwd}:{branch}" if branch else cwd
+
+
 # ── the app ──────────────────────────────────────────────────────────
 
 class App:
+    SIDEBAR = 34          # right Context panel width
+
     def __init__(self, creds, model, stealth):
         self.creds = creds
         self.stealth = stealth
@@ -121,7 +175,7 @@ class App:
         chat.messages.append(Msg("user", text))
         resp = Msg("assistant", "", streaming=True)
         chat.messages.append(resp)
-        if chat.title == "new chat":
+        if chat.title == "New session":
             chat.title = text[:48]
         self.buf, self.cur, self.follow = "", 0, True
         self.busy, self._resp = True, resp
@@ -182,8 +236,7 @@ class App:
         if overlay == "model":
             self.set_model(self.model_items()[sel][1])
         elif overlay == "chat":
-            items = self.chats
-            if sel >= len(items):
+            if sel >= len(self.chats):
                 self.new_chat()
             else:
                 self.active = sel
@@ -202,34 +255,53 @@ class App:
         if self.overlay == "model":
             return [label for label, _ in self.model_items()]
         if self.overlay == "chat":
-            return [f"{c.title}" for c in self.chats] + ["＋ new chat"]
+            return [c.title for c in self.chats] + ["＋ new chat"]
         return [
             "enter / ctrl+s    send message",
-            "ctrl+n            new chat",
+            "ctrl+n            new session",
             "ctrl+o            switch model",
-            "ctrl+a            switch chat",
+            "ctrl+a            switch session",
             "↑ ↓  pgup pgdn     scroll messages",
             "← →  home end      move cursor",
             "esc               clear input",
             "ctrl+c / ctrl+d   quit",
         ]
 
-    # ── curses surface ───────────────────────────────────────────────
-    def attr(self, kind):
-        m = {"": (0, 0), "user": (2, curses.A_BOLD), "note": (4, 0),
-             "accent": (1, curses.A_BOLD), "dim": (6, 0), "good": (3, 0),
-             "warn": (4, 0), "bad": (5, 0), "title": (1, curses.A_BOLD)}
-        c, a = m.get(kind, (0, 0))
-        return (curses.color_pair(c) | a) if c else a
+    # ── colours ──────────────────────────────────────────────────────
+    def _init_colors(self):
+        curses.start_color()
+        if curses.COLORS >= 256:
+            pairs = [(TEXT, BASE), (DIM, BASE), (GREEN, BASE), (RED, BASE),
+                     (PURPLE, BASE), (WARM, BASE), (231, BASE), (TEXT, PANEL),
+                     (DIM, PANEL), (240, BASE), (WARM, PANEL)]
+        else:  # basic fallback
+            pairs = [(curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
+                     (curses.COLOR_GREEN, -1), (curses.COLOR_RED, -1),
+                     (curses.COLOR_MAGENTA, -1), (curses.COLOR_YELLOW, -1),
+                     (curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
+                     (curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
+                     (curses.COLOR_YELLOW, -1)]
+        for i, (fg, bg) in enumerate(pairs, 1):
+            curses.init_pair(i, fg, bg)
 
+    # pair indices
+    P_TEXT, P_DIM, P_GREEN, P_RED, P_PURPLE, P_WARM = 1, 2, 3, 4, 5, 6
+    P_WHITE, P_PTEXT, P_PDIM, P_BORDER, P_PWARM = 7, 8, 9, 10, 11
+
+    def attr(self, kind):
+        m = {"": self.P_TEXT, "user": self.P_WHITE, "note": self.P_PURPLE,
+             "dim": self.P_DIM, "green": self.P_GREEN, "red": self.P_RED,
+             "warm": self.P_WARM, "border": self.P_BORDER,
+             "panel": self.P_PTEXT, "panel-dim": self.P_PDIM,
+             "panel-warm": self.P_PWARM}
+        return curses.color_pair(m.get(kind, self.P_TEXT))
+
+    # ── curses surface ───────────────────────────────────────────────
     def run(self, scr):
         curses.curs_set(1)
         curses.raw()                # cbreak leaves ^O (discard) and ^Q (XON) to the tty
         curses.use_default_colors()
-        for i, c in enumerate([curses.COLOR_CYAN, curses.COLOR_BLUE,
-                               curses.COLOR_GREEN, curses.COLOR_YELLOW,
-                               curses.COLOR_RED, curses.COLOR_MAGENTA]):
-            curses.init_pair(i + 1, c, -1)
+        self._init_colors()
         scr.keypad(True)
         scr.timeout(80)
         while True:
@@ -249,83 +321,170 @@ class App:
     def draw(self, scr):
         h, w = scr.getmaxyx()
         scr.erase()
-        if h < 6 or w < 24:
+        if h < 12 or w < 40:
             try:
-                scr.addstr(0, 0, "terminal too small")
+                scr.addstr(0, 0, "terminal too small", self.attr(""))
             except curses.error:
                 pass
             scr.refresh()
             return
         try:
-            self._header(scr, w)
-            self._stream(scr, h, w)
+            self._fill(scr, h, w)
+            self._tabs(scr, w)
+            self._body(scr, h, w)
             self._composer(scr, h, w)
             self._footer(scr, h, w)
+            self._statusbar(scr, h, w)
             if self.overlay:
                 self._overlay(scr, h, w)
         except curses.error:
             pass
         scr.refresh()
 
-    def _header(self, scr, w):
-        chat = self.chat()
-        scr.addstr(0, 0, "⌬ ", self.attr("accent"))
-        scr.addstr(0, 2, "reclaude", self.attr("accent"))
-        scr.addstr(0, 11, "chat", self.attr("dim"))
-        title = trunc(chat.title, max(8, w - 44))
-        if w > len(title) + 24:
-            scr.addstr(0, (w - len(title)) // 2, title, curses.A_BOLD)
-        right = chat.model
-        if w > len(right) + 2:
-            scr.addstr(0, w - len(right) - 1, right, self.attr("dim"))
+    def _fill(self, scr, h, w):
+        for y in range(h):
+            scr.addstr(y, 0, " " * (w - 1), self.attr(""))
+            try:
+                scr.addch(y, w - 1, " ", self.attr(""))
+            except curses.error:
+                pass
 
-    def _stream(self, scr, h, w):
-        vh = h - 3
-        body = render_messages(self.chat(), w - 4)
-        maxoff = max(0, len(body) - vh)
-        if self.follow:
-            self.off = maxoff
-        self.off = max(0, min(self.off, maxoff))
-        for i, (text, kind) in enumerate(body[self.off:self.off + vh]):
-            scr.addstr(1 + i, 0, text[:w - 1], self.attr(kind))
+    def side_w(self, w):
+        # opencode only shows the Context panel once a conversation exists.
+        return self.SIDEBAR if (w >= 88 and self.chat().messages) else 0
+
+    def _tabs(self, scr, w):
+        # session tab strip: spinner + active title, other titles, then "+ New session"
+        x = 1
+        for i, c in enumerate(self.chats):
+            spin = f"{SPINNER[self.spin // 2 % len(SPINNER)]} " if (self.busy and i == self.active) else ""
+            label = f"{spin}{trunc(c.title, 30)}"
+            if x + len(label) >= w - 15:
+                break
+            scr.addstr(0, x, label, self.attr("warm") if i == self.active else self.attr("dim"))
+            x += len(label) + 3
+        scr.addstr(0, x, "+ New session", self.attr("dim"))
+
+    def main_w(self, w):
+        sw = self.side_w(w)
+        return w - sw - (1 if sw else 0)
+
+    def _layout(self, h):
+        """Return (empty, composer_top, footer_row). Empty chats centre the
+        logo+composer group like opencode; a live chat pins it to the bottom."""
+        if self.chat().messages:
+            return False, h - 7, h - 2
+        top = max(1, (h - 12) // 2)
+        return True, top + 6, top + 11
+
+    def _body(self, scr, h, w):
+        mw = self.main_w(w)
+        top, bottom = 1, h - 7           # message region rows
+        vh = bottom - top
+        chat = self.chat()
+
+        if not chat.messages:
+            self._empty_state(scr, self._layout(h)[1], mw, h)
+        else:
+            body = render_messages(chat, mw)
+            maxoff = max(0, len(body) - vh)
+            if self.follow:
+                self.off = maxoff
+            self.off = max(0, min(self.off, maxoff))
+            for i, (text, kind) in enumerate(body[self.off:self.off + vh]):
+                scr.addstr(top + i, 0, text[:mw], self.attr(kind))
+
+        sw = self.side_w(w)
+        if sw:
+            self._sidebar(scr, top, bottom, w - sw, sw)
+
+    def _empty_state(self, scr, comp_top, width, h):
+        g = max(1, comp_top - 6)         # group top: logo, then hint
+        logo = block_word("reclaude")
+        for i, row in enumerate(logo):
+            if row:
+                scr.addstr(g + i, max(0, (width - len(row)) // 2), row, self.attr("warm"))
+        hint = "Ask anything below"
+        scr.addstr(g + 4, max(0, (width - len(hint)) // 2), hint, self.attr("dim"))
+
+    def _sidebar(self, scr, top, bottom, x, sw):
+        for y in range(top, bottom):
+            scr.addstr(y, x - 1, "│", self.attr("border"))
+        chat = self.chat()
+        chars = sum(len(m.text) for m in chat.messages)
+        rows = [
+            ("Context", "panel-warm"),
+            (f"~{chars // 4:,} tokens", "panel"),
+            (f"{len(chat.messages)} messages", "panel-dim"),
+            ("", "panel"),
+            ("Model", "panel-warm"),
+            (trunc(chat.model, sw - 2), "panel"),
+            ("FREE", "panel-dim"),
+        ]
+        for i, (text, kind) in enumerate(rows):
+            if top + i < bottom:
+                scr.addstr(top + i, x, trunc(text, sw - 1), self.attr(kind))
 
     def _composer(self, scr, h, w):
-        y = h - 2
-        scr.addstr(y, 0, "┃ ", self.attr("accent"))
-        if not self.buf and not self.busy:
-            scr.addstr(y, 2, trunc("Message…", w - 3), self.attr("dim"))
-            return
-        start = max(0, self.cur - (w - 4))
-        scr.addstr(y, 2, self.buf[start:start + w - 3], 0)
-        scr.move(y, 2 + (self.cur - start))
+        mw = self.main_w(w)
+        left = 1
+        cw = mw - 3                      # box width (gutter left, gap right)
+        top = self._layout(h)[1]
+        chat = self.chat()
+        for y in range(top, top + 5):    # panel background behind the box
+            scr.addstr(y, 0, " " * mw, self.attr("panel"))
+
+        def box_row(y, text, kind="panel"):
+            scr.addstr(y, left, "┃", self.attr("panel-warm"))
+            if text:
+                scr.addstr(y, left + 3, trunc(text, cw - 4), self.attr(kind))
+
+        box_row(top, "")
+        content = self.buf if self.buf else 'Ask anything… "Fix broken tests"'
+        start = max(0, self.cur - (cw - 6)) if self.buf else 0
+        box_row(top + 1, content[start:], "panel" if self.buf else "panel-dim")
+        box_row(top + 2, "")
+        box_row(top + 3, f"Build · {chat.model}", "panel-warm")
+        scr.addstr(top + 4, left, "╹" + "▀" * (cw - 1), self.attr("panel-warm"))
+        if self.buf:
+            try:
+                scr.move(top + 1, left + 3 + (self.cur - start))
+            except curses.error:
+                pass
 
     def _footer(self, scr, h, w):
-        hint = ("enter send · ctrl+n new · ctrl+o model · ctrl+a chats · "
-                "↑↓ scroll · ctrl+c quit")
-        scr.addstr(h - 1, 0, trunc(hint, w - 12), self.attr("dim"))
-        if self.busy:
-            s = f" {SPINNER[self.spin // 2 % len(SPINNER)]} thinking "
-            scr.addstr(h - 1, max(0, w - len(s) - 1), s, self.attr("accent"))
+        mw = self.main_w(w)
+        y = self._layout(h)[2]
+        scr.addstr(y, 4, trunc(cwd_label(), max(0, mw // 2)), self.attr("dim"))
+        right = "esc interrupt   ctrl+c quit" if self.busy else \
+            "ctrl+o models   ctrl+n new   ? help"
+        scr.addstr(y, max(4, mw - len(right) - 2), right, self.attr("dim"))
+
+    def _statusbar(self, scr, h, w):
+        scr.addstr(h - 1, 2, f"⊙ {len(self.chats)} session  /help", self.attr("dim"))
+        tag = "reclaude"
+        scr.addstr(h - 1, max(2, w - len(tag) - 2), tag, self.attr("dim"))
 
     def _overlay(self, scr, h, w):
         items = self.items()
-        title = {"model": "Model", "chat": "Chats", "help": "Keys"}[self.overlay]
-        bw = min(w - 4, max([42] + [len(i) + 6 for i in items]))
+        title = {"model": "Model", "chat": "Sessions", "help": "Keys"}[self.overlay]
+        bw = min(w - 4, max([44] + [len(i) + 6 for i in items]))
         bh = min(h - 2, len(items) + 2)
         x, y = (w - bw) // 2, (h - bh) // 2
-        top, bot = "┌" + "─" * (bw - 2) + "┐", "└" + "─" * (bw - 2) + "┘"
-        scr.addstr(y, x, top, self.attr("accent"))
-        scr.addstr(y, x + 2, f" {title} ", self.attr("title"))
-        scr.addstr(y + bh - 1, x, bot, self.attr("accent"))
+        for r in range(bh):
+            scr.addstr(y + r, x, " " * bw, self.attr("panel"))
+        scr.addstr(y, x, "┌" + "─" * (bw - 2) + "┐", self.attr("warm"))
+        scr.addstr(y, x + 2, f" {title} ", self.attr("panel-warm"))
+        scr.addstr(y + bh - 1, x, "└" + "─" * (bw - 2) + "┘", self.attr("warm"))
         for r in range(1, bh - 1):
-            scr.addstr(y + r, x, "│", self.attr("accent"))
-            scr.addstr(y + r, x + bw - 1, "│", self.attr("accent"))
+            scr.addstr(y + r, x, "│", self.attr("warm"))
+            scr.addstr(y + r, x + bw - 1, "│", self.attr("warm"))
         scroll = max(0, self.ov_sel - (bh - 2) + 1)
         for i, item in enumerate(items[scroll:scroll + bh - 2]):
             row = y + 1 + i
             sel = (scroll + i) == self.ov_sel and self.overlay != "help"
-            scr.addstr(row, x + 2, trunc(item, bw - 3).ljust(bw - 3),
-                       curses.A_REVERSE if sel else 0)
+            a = self.attr("panel") | (curses.A_REVERSE if sel else 0)
+            scr.addstr(row, x + 2, trunc(item, bw - 3).ljust(bw - 3), a)
 
     # ── input ────────────────────────────────────────────────────────
     def key(self, ch):

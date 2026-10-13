@@ -9,7 +9,7 @@ from claude_re import chrome_cookies
 from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
 from claude_re.payload import build_payload
 from claude_re.streaming import _sse_data, _split_lines
-from claude_re.tui import Chat, Msg, render_messages, wrap
+from claude_re.tui import App, Chat, Msg, block_word, render_messages, wrap
 
 
 class SseParserTest(unittest.TestCase):
@@ -86,6 +86,25 @@ class TuiRenderTest(unittest.TestCase):
         text = "\n".join(line for line, _ in render_messages(chat, 40))
         self.assertIn("┃ hi", text)
         self.assertIn("hello▌", text)
+
+
+class TuiLayoutTest(unittest.TestCase):
+    """The empty state floats the composer; a live chat pins it to the bottom."""
+
+    def test_composer_centred_when_empty_pinned_when_live(self):
+        app = App(None, "claude-sonnet-5-5", stealth=False)
+        empty, comp, foot = app._layout(40)
+        self.assertTrue(empty)
+        self.assertLess(comp, 40 - 7)
+        app.chat().messages.append(Msg("user", "hi"))
+        live, comp2, foot2 = app._layout(40)
+        self.assertFalse(live)
+        self.assertEqual((comp2, foot2), (33, 38))
+
+    def test_block_word_rows_are_rectangular(self):
+        rows = block_word("reclaude")
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({len(r) for r in rows}, {31})
 
 
 if __name__ == "__main__":
