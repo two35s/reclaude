@@ -7,7 +7,7 @@ Terminal client for Claude.ai — replays your own browser session against Claud
 ## Install
 
 ```bash
-git clone <url> && cd reclaude
+git clone https://github.com/two35s/reclaude.git && cd reclaude
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
