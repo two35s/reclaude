@@ -29,6 +29,27 @@ COMMANDS = [
     ("/quit", "exit"),
 ]
 
+# Canonical slash commands (aliases included); _command accepts unique prefixes.
+_COMMANDS = {
+    "new": "new",
+    "model": "model",
+    "models": "models",
+    "help": "help",
+    "quit": "quit",
+    "exit": "quit",
+    "q": "quit",
+}
+
+
+def match_command(frag):
+    """Exact or unique-prefix command match. Returns (cmd, candidates). Pure; tested."""
+    if frag in _COMMANDS:
+        return _COMMANDS[frag], []
+    hits = sorted({full for name, full in _COMMANDS.items() if name.startswith(frag)})
+    if len(hits) == 1:
+        return hits[0], []
+    return None, hits
+
 
 def trunc(s, n):
     s = str(s)
@@ -116,6 +137,7 @@ class App:
         self.spin = 0
         self.cmd_sel = 0
         self._cmd_buf = None
+        self.cursor = None  # (y, x) set by _input, applied after all drawing
 
     # ── sending ──────────────────────────────────────────────
     def send(self):
@@ -142,9 +164,18 @@ class App:
     def _command(self, text):
         """Slash commands (no network). Returns True to quit."""
         parts = text[1:].split(None, 1)
-        cmd = parts[0].lower() if parts else ""
+        frag = parts[0].lower() if parts else ""
         arg = parts[1].strip() if len(parts) > 1 else ""
-        if cmd in ("quit", "exit", "q"):
+        cmd, hits = match_command(frag)
+        if cmd is None:
+            if hits:
+                opts = " or ".join(f"/{h}" for h in hits)
+                self.messages.append(["note", f"ambiguous command: /{frag} — did you mean {opts}?"])
+            else:
+                self.messages.append(["note", f"unknown command: {text} — try /help"])
+            self.off = 0
+            return False
+        if cmd == "quit":
             return True
         if cmd == "new":
             self.fresh()
@@ -152,10 +183,9 @@ class App:
             if arg:
                 self.set_model(arg)
             else:
-                self.dialog, self.sel = "models", 0
+                self.open_models()
         elif cmd == "models":
-            names = ", ".join(MODEL_ALIASES)
-            self.messages.append(["note", f"models: {names}"])
+            self.open_models()
         elif cmd == "help":
             self.dialog, self.sel = "help", 0
         else:
@@ -204,9 +234,28 @@ class App:
     def set_model(self, alias):
         if self.busy:
             return
-        self.model = MODEL_ALIASES.get(alias, alias)
+        full = MODEL_ALIASES.get(alias, alias)
+        if full == self.model:
+            self.messages.append(["note", f"model: {alias} ({full}) — unchanged"])
+            return
+        self.model = full
         self.fresh()
         self.messages.append(["note", f"model: {alias} ({self.model})"])
+
+    def open_models(self):
+        """Open the picker on the active model's row."""
+        if self.busy:
+            return
+        ids = list(MODEL_ALIASES.values())
+        self.sel = ids.index(self.model) if self.model in ids else 0
+        self.dialog = "models"
+
+    def model_items(self):
+        """Picker rows; the active model is marked. Pure; tested."""
+        return [
+            (f"{'●' if full == self.model else ' '} {alias:<12} {full}", full == self.model)
+            for alias, full in MODEL_ALIASES.items()
+        ]
 
     def _cleanup(self):
         if self.stealth and self.state.get("conv_id") and self.state.get("created"):
@@ -237,7 +286,10 @@ class App:
 
     # ── run loop ─────────────────────────────────────────────
     def run(self, scr):
-        curses.curs_set(1)
+        try:
+            curses.curs_set(2)  # block cursor on the type bar
+        except curses.error:
+            pass
         curses.raw()  # cbreak keeps ^O/^Q for the tty; raw gives them to us
         self._colors()
         scr.keypad(True)
@@ -273,6 +325,8 @@ class App:
             self._footer(scr, h, w)
             if self.dialog:
                 self._dialog(scr, h, w)
+            if self.cursor is not None:
+                scr.move(*self.cursor)  # last: later draws must not drag it away
         except curses.error:
             pass
         scr.refresh()
@@ -311,10 +365,7 @@ class App:
             scr.addstr(h - 2, 2, self.buf[start : start + maxw])
             if not self.buf and not self.busy:
                 scr.addstr(h - 2, 2, "type + enter", self.attr("dim"))
-            try:
-                scr.move(h - 2, 2 + self.cur - start)
-            except curses.error:
-                pass
+            self.cursor = (h - 2, 2 + self.cur - start)
             return
         top, mid, bot = h - 4, h - 3, h - 2
         has_chat = any(r in ("user", "assistant") for r, _ in self.messages)
@@ -332,10 +383,7 @@ class App:
         if not self.buf:
             hint = "waiting for reply…" if self.busy else "type a message, enter to send"
             scr.addstr(mid, 4, hint[:maxw], self.attr("dim"))
-        try:
-            scr.move(mid, 4 + self.cur - start)
-        except curses.error:
-            pass
+        self.cursor = (mid, 4 + self.cur - start)
 
     def _cmd_popup(self, scr, h, w, items):
         bw = min(w - 2, max(len(c) + len(d) + 5 for c, d in items) + 2)
@@ -367,7 +415,8 @@ class App:
 
     def _dialog(self, scr, h, w):
         if self.dialog == "models":
-            items = [f"{a:<12} {f}" for a, f in MODEL_ALIASES.items()]
+            rows = self.model_items()
+            items = [text for text, _ in rows]
             title, hint, selectable = "model", "enter pick · esc close", True
         else:
             items = [
@@ -412,8 +461,7 @@ class App:
         elif ch == 14:
             self.fresh()
         elif ch == 15:
-            if not self.busy:
-                self.dialog, self.sel = "models", 0
+            self.open_models()
         elif ch == curses.KEY_UP:
             items = self.cmd_items()
             if items:

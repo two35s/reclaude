@@ -24,6 +24,77 @@ def test_new_clears_and_model_switches(app):
     assert app.messages[-1][1].startswith("model:")
 
 
+def test_models_opens_picker_on_active_row(app):
+    assert app._command("/models") is False
+    assert app.dialog == "models"
+    assert app.sel == 1  # claude-sonnet-5-5 is second in MODEL_ALIASES
+    rows = app.model_items()
+    assert sum(active for _, active in rows) == 1
+    assert rows[1][1] is True and rows[1][0].startswith("●")
+
+
+def test_set_model_unchanged_keeps_messages(app):
+    app.messages.append(["user", "hi"])
+    app.set_model("sonnet")
+    assert app.model == "claude-sonnet-5-5"
+    assert [r for r, _ in app.messages] == ["user", "note"]
+
+
+def test_run_uses_block_cursor(monkeypatch, app):
+    import curses
+
+    seen = {}
+    monkeypatch.setattr(curses, "curs_set", lambda v: seen.setdefault("v", v))
+    monkeypatch.setattr(curses, "raw", lambda: None)
+    monkeypatch.setattr(App, "_colors", lambda self: None)
+    monkeypatch.setattr(App, "attr", lambda self, kind: 0)
+
+    class QuitScr:
+        moves = []
+
+        def keypad(self, flag):
+            pass
+
+        def timeout(self, ms):
+            pass
+
+        def getmaxyx(self):
+            return (24, 80)
+
+        def erase(self):
+            pass
+
+        def refresh(self):
+            pass
+
+        def addstr(self, y, x, s, *a):
+            pass
+
+        def move(self, y, x):
+            QuitScr.moves.append((y, x))
+
+        def getch(self):
+            return 4  # Ctrl+D quits immediately
+
+    app.run(QuitScr())
+    assert seen["v"] == 2
+    assert QuitScr.moves and QuitScr.moves[-1] == (21, 4)  # last move wins: input row
+
+
+def test_partial_command_unique_prefix_runs(app):
+    assert app._command("/n") is False
+    assert app.messages == []
+    assert app._command("/he") is False
+    assert app.dialog == "help"
+
+
+def test_partial_command_ambiguous_suggests(app):
+    assert app._command("/mo") is False
+    role, text = app.messages[-1]
+    assert role == "note"
+    assert "/model" in text and "/models" in text
+
+
 def test_quit_and_help(app):
     assert app._command("/quit") is True
     assert app._command("/help") is False
