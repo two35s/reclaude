@@ -129,8 +129,6 @@ python -m claude_re --batch prompts.txt              # one prompt per line → b
 python -m claude_re --clear-session                  # wipe stored credentials
 python -m claude_re --proxy                          # OpenAI-compatible proxy on :8765 (for Crush)
 python -m claude_re --proxy --port 9000              # proxy on a custom port
-python -m claude_re --stats                          # opencode usage dashboard for this project
-python -m claude_re --stats --models --tools         # dashboard with model/tool breakdowns
 ```
 
 ### Flags
@@ -142,7 +140,6 @@ python -m claude_re --stats --models --tools         # dashboard with model/tool
 | `--login` | Open Chrome to log in and save the profile, without extracting. |
 | `--manual` | Enter `org_id` / `Cookie` header by hand. |
 | `--tui` | Full-screen chat interface (opencode-style), instead of the line REPL. |
-| `--stats` | Usage dashboard for this project — delegates to opencode's own `stats` CLI (`opencode stats --project .`). Accepts `--days N`, `--year Y`, `--all`, `--models`, `--tools`, `--cost`, `--full`, `--limit N`, `--json`. |
 | `--proxy` | Start an OpenAI-compatible HTTP proxy on `localhost:8765` for Crush/opencode integration. |
 | `--port PORT` | Port for `--proxy` mode (default: `8765`). |
 | `--prompt TEXT` | Send a single prompt, then exit. |
@@ -240,7 +237,6 @@ reclaude/
 │   ├── http.py            # session reuse, retries, request backend
 │   ├── streaming.py       # SSE parsing, rate-limit handling
 │   ├── tui.py             # full-screen opencode-style chat (--tui)
-│   ├── stats.py           # usage dashboard: delegates to `opencode stats --project .`
 │   └── repl.py            # help + model listing
 └── requirements.txt
 ```

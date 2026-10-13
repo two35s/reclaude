@@ -14,6 +14,12 @@ from .streaming import stream_prompt
 
 
 def main():
+    print()
+    print("  ╔════════════════════════════════════════════════════╗")
+    print("  ║  Claude.ai RE Client v4 — Secure + Stealth        ║")
+    print("  ╚════════════════════════════════════════════════════╝")
+    print()
+
     ap = argparse.ArgumentParser(description="Claude.ai Security Research Client v4")
     ap.add_argument("--login",         action="store_true", help="Browser login (save profile)")
     ap.add_argument("--auto-fetch",    action="store_true", help="Auto-extract creds via Chrome+CDP")
@@ -31,26 +37,6 @@ def main():
     ap.add_argument("--clear-session", action="store_true", help="Delete stored credentials")
     ap.add_argument("--tui",           action="store_true",
                     help="Full-screen opencode-style chat interface")
-    ap.add_argument("--stats",         action="store_true",
-                    help="opencode usage dashboard for this project (delegates to `opencode stats --project .`)")
-    ap.add_argument("--days",          type=int, default=None,
-                    help="Dashboard: show the last N days; 0 means today")
-    ap.add_argument("--year",          type=int, default=None,
-                    help="Dashboard: show a calendar year")
-    ap.add_argument("--all",           action="store_true",
-                    help="Dashboard: show lifetime statistics")
-    ap.add_argument("--models",        action="store_true",
-                    help="Dashboard: show model usage")
-    ap.add_argument("--tools",         action="store_true",
-                    help="Dashboard: show tool reliability")
-    ap.add_argument("--cost",          action="store_true",
-                    help="Dashboard: show cost and token details")
-    ap.add_argument("--full",          action="store_true",
-                    help="Dashboard: show every detailed section")
-    ap.add_argument("--limit",         type=int, default=None,
-                    help="Dashboard: number of rows in detailed sections")
-    ap.add_argument("--json",          action="store_true",
-                    help="Dashboard: output statistics as JSON")
     ap.add_argument("--proxy",         action="store_true",
                     help="Start an OpenAI-compatible proxy (for Crush/opencode integration)")
     ap.add_argument("--port",          type=int, default=8765,
@@ -67,19 +53,6 @@ def main():
     if args.login:
         do_login()
         return
-
-    # ── Dashboard (opencode's own stats CLI, scoped to this project) ──
-    # Runs before the banner so --json stays pipeable pure JSON.
-    if args.stats:
-        from .stats import run_stats
-        run_stats(args)
-        return
-
-    print()
-    print("  ╔════════════════════════════════════════════════════╗")
-    print("  ║  Claude.ai RE Client v4 — Secure + Stealth        ║")
-    print("  ╚════════════════════════════════════════════════════╝")
-    print()
 
     # ── Credential resolution ────────────────────────────
     creds = CredentialManager()
