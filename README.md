@@ -61,6 +61,15 @@ Point [Crush](https://github.com/charmbracelet/crush) or any OpenAI client at `h
 
 Your `sessionKey` is a password: never share, upload, or commit the credential file. `--clear-session` when done; if exposed, log out in the browser to invalidate it.
 
+## Dev
+
+```bash
+pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q              # tests
+.venv/bin/python -m ruff check .            # lint
+.venv/bin/python -m ruff format --check .   # formatting
+```
+
 ## License
 
 Research and educational use only. No warranty.

@@ -1,4 +1,5 @@
 """SSE streaming + rate-limit handling."""
+
 import json
 import os
 import random
@@ -44,8 +45,15 @@ def _sse_data(line):
     return line[6:]
 
 
-def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
-                  session_state=None, _rate_retries=0, on_text=None):
+def stream_prompt(
+    creds,
+    prompt,
+    model=DEFAULT_MODEL,
+    stealth=True,
+    session_state=None,
+    _rate_retries=0,
+    on_text=None,
+):
     """Send prompt with real-time streaming. Returns full response text.
 
     Session memory: uses ONE conversation for the entire session.
@@ -68,8 +76,9 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     conv_id = session_state["conv_id"]
 
     payload = build_payload(prompt, model)
-    endpoint = (f"{URL_BASE}/api/organizations/{creds.org_id}"
-                f"/chat_conversations/{conv_id}/completion")
+    endpoint = (
+        f"{URL_BASE}/api/organizations/{creds.org_id}/chat_conversations/{conv_id}/completion"
+    )
     headers = http_mod.make_headers(creds)
 
     def emit(txt):
@@ -115,9 +124,14 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     # ── Send request (reused session + consistent fingerprint) ─
     resp = None
     try:
-        resp = http_mod.request("POST", endpoint, headers=headers,
-                                json_body=payload, timeout=REQUEST_TIMEOUT,
-                                content_callback=on_chunk)
+        resp = http_mod.request(
+            "POST",
+            endpoint,
+            headers=headers,
+            json_body=payload,
+            timeout=REQUEST_TIMEOUT,
+            content_callback=on_chunk,
+        )
     except Exception as e:
         print(f"\n[!] Request error: {e}")
 
@@ -160,9 +174,11 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
                     low = f"{code} {msg}".lower()
                     if status_code[0] == 429:
                         pass  # 429s fall through to handle_rate_limit() below
-                    elif ("account_session_invalid" in low
-                          or "invalid authorization" in low
-                          or "authentication_error" in low):
+                    elif (
+                        "account_session_invalid" in low
+                        or "invalid authorization" in low
+                        or "authentication_error" in low
+                    ):
                         print("\n[!] Session invalid or expired. Run --auto-fetch")
                         return None
                     elif "model" in code or "model" in msg.lower():
@@ -189,8 +205,11 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
             print("\n[!] Session expired. Run --auto-fetch")
         elif sc == 403:
             low = error_body.lower()
-            if ("account_session_invalid" in low or "invalid authorization" in low
-                    or "authentication_error" in low):
+            if (
+                "account_session_invalid" in low
+                or "invalid authorization" in low
+                or "authentication_error" in low
+            ):
                 print("\n[!] Session invalid or expired. Run --auto-fetch")
             elif "model" in low:
                 print(f"\n[!] Model '{model}' not available on your account tier.")
@@ -198,9 +217,16 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
             else:
                 print(f"\n[!] 403: {error_body[:200]}")
         elif sc == 429:
-            return handle_rate_limit(resp, creds, prompt, model, stealth,
-                                     session_state, _retries=_rate_retries,
-                                     on_text=on_text)
+            return handle_rate_limit(
+                resp,
+                creds,
+                prompt,
+                model,
+                stealth,
+                session_state,
+                _retries=_rate_retries,
+                on_text=on_text,
+            )
         else:
             print(f"\n[!] HTTP {sc}: {error_body[:200]}")
         return None
@@ -215,8 +241,17 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     return full
 
 
-def handle_rate_limit(resp, creds, prompt, model, stealth,
-                      session_state=None, _retries=0, _max_retries=MAX_RATE_RETRIES, on_text=None):
+def handle_rate_limit(
+    resp,
+    creds,
+    prompt,
+    model,
+    stealth,
+    session_state=None,
+    _retries=0,
+    _max_retries=MAX_RATE_RETRIES,
+    on_text=None,
+):
     """Handle 429: honor Retry-After, fallback to haiku once, bounded retries.
 
     Preserves session_state so conversation memory survives the retry.
@@ -244,8 +279,9 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
     haiku_id = MODEL_ALIASES.get("haiku", "claude-haiku-5-5")
     if model != haiku_id:
         print("[*] Falling back to haiku...")
-        return stream_prompt(creds, prompt, haiku_id, stealth,
-                             session_state, _rate_retries=_retries, on_text=on_text)
+        return stream_prompt(
+            creds, prompt, haiku_id, stealth, session_state, _rate_retries=_retries, on_text=on_text
+        )
 
     # Already on haiku — wait with jitter and retry (bounded)
     wait = DEFAULT_RETRY_WAIT
@@ -256,5 +292,6 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
     wait = min(wait, MAX_WAIT_CAP) + random.uniform(0, MAX_JITTER)
     print(f"[*] Waiting {wait:.1f}s (attempt {_retries + 1}/{MAX_RETRIES})...")
     time.sleep(wait)
-    return stream_prompt(creds, prompt, model, stealth, session_state,
-                         _rate_retries=_retries + 1, on_text=on_text)
+    return stream_prompt(
+        creds, prompt, model, stealth, session_state, _rate_retries=_retries + 1, on_text=on_text
+    )

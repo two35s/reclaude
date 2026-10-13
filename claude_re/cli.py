@@ -1,4 +1,5 @@
 """CLI entry point: arg parsing, modes, interactive REPL."""
+
 import argparse
 import json
 import os
@@ -12,6 +13,12 @@ from .creds import CredentialManager
 from .repl import print_help, print_models
 from .streaming import stream_prompt
 
+
+def _inline_creds_conflict(creds, org_id):
+    """True when stored valid creds belong to a different org (refuse overwrite)."""
+    return bool(creds.load() and creds.is_valid() and creds.org_id != org_id)
+
+
 DEFAULT_BATCH_DELAY = 2
 
 
@@ -23,26 +30,34 @@ def main():
     print()
 
     ap = argparse.ArgumentParser(description="Claude.ai Security Research Client v4")
-    ap.add_argument("--login",         action="store_true", help="Browser login (save profile)")
-    ap.add_argument("--auto-fetch",    action="store_true", help="Auto-extract creds via Chrome+CDP")
-    ap.add_argument("--from-chrome",   nargs="?", const="", default=None, metavar="PROFILE",
-                    help="Extract creds from an already-logged-in Chrome profile")
-    ap.add_argument("--manual",        action="store_true", help="Manual credential input")
-    ap.add_argument("--prompt",        type=str, help="Single prompt to send")
-    ap.add_argument("--model",         type=str, default="sonnet",
-                    help="Model: haiku/sonnet/opus (default: sonnet)")
-    ap.add_argument("--org-id",        type=str, help="Organization ID")
-    ap.add_argument("--cookie",        type=str, help="Full Cookie header string")
-    ap.add_argument("--jailbreak",     type=str, help="Read prompt from file")
-    ap.add_argument("--batch",         type=str, help="Send multiple prompts from file")
-    ap.add_argument("--no-stealth",    action="store_true", help="Disable stealth mode")
+    ap.add_argument("--login", action="store_true", help="Browser login (save profile)")
+    ap.add_argument("--auto-fetch", action="store_true", help="Auto-extract creds via Chrome+CDP")
+    ap.add_argument(
+        "--from-chrome",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PROFILE",
+        help="Extract creds from an already-logged-in Chrome profile",
+    )
+    ap.add_argument("--manual", action="store_true", help="Manual credential input")
+    ap.add_argument("--prompt", type=str, help="Single prompt to send")
+    ap.add_argument(
+        "--model", type=str, default="sonnet", help="Model: haiku/sonnet/opus (default: sonnet)"
+    )
+    ap.add_argument("--org-id", type=str, help="Organization ID")
+    ap.add_argument("--cookie", type=str, help="Full Cookie header string")
+    ap.add_argument("--jailbreak", type=str, help="Read prompt from file")
+    ap.add_argument("--batch", type=str, help="Send multiple prompts from file")
+    ap.add_argument("--no-stealth", action="store_true", help="Disable stealth mode")
     ap.add_argument("--clear-session", action="store_true", help="Delete stored credentials")
-    ap.add_argument("--tui",           action="store_true",
-                    help="Simple full-screen chat")
-    ap.add_argument("--proxy",         action="store_true",
-                    help="Start an OpenAI-compatible proxy (for Crush/opencode integration)")
-    ap.add_argument("--port",          type=int, default=8765,
-                    help="Port for --proxy mode (default: 8765)")
+    ap.add_argument("--tui", action="store_true", help="Simple full-screen chat")
+    ap.add_argument(
+        "--proxy",
+        action="store_true",
+        help="Start an OpenAI-compatible proxy (for Crush/opencode integration)",
+    )
+    ap.add_argument("--port", type=int, default=8765, help="Port for --proxy mode (default: 8765)")
     args = ap.parse_args()
 
     # ── Clear session ────────────────────────────────────
@@ -69,9 +84,20 @@ def main():
             return
     elif args.manual:
         creds.manual_input()
-    elif args.org_id and args.cookie:
-        creds.org_id = args.org_id
-        creds._parse_cookies(args.cookie)
+    elif (args.org_id or os.environ.get("CLAUDE_RE_ORG_ID")) and (
+        args.cookie or os.environ.get("CLAUDE_RE_COOKIE")
+    ):
+        if args.cookie:
+            print(
+                "[!] Warning: --cookie exposes your sessionKey via `ps`/shell history;"
+                " prefer the CLAUDE_RE_COOKIE env var."
+            )
+        if _inline_creds_conflict(creds, args.org_id or os.environ.get("CLAUDE_RE_ORG_ID")):
+            print("[!] Stored credentials exist for a different org; keeping them.")
+            print("    Run --clear-session first to replace them.")
+            return
+        creds.org_id = args.org_id or os.environ.get("CLAUDE_RE_ORG_ID")
+        creds._parse_cookies(args.cookie or os.environ.get("CLAUDE_RE_COOKIE", ""))
         creds.save()
     elif not creds.load():
         print("[!] No credentials. Use --manual, --auto-fetch, or --login")
@@ -88,12 +114,14 @@ def main():
     # Simple full-screen chat.
     if args.tui:
         from .tui import run_tui
+
         run_tui(creds, model, stealth)
         return
 
     # OpenAI-compatible proxy mode (for Crush / archived opencode integration).
     if args.proxy:
         from .proxy import run_proxy
+
         run_proxy(creds, port=args.port)
         return
 
@@ -124,7 +152,7 @@ def main():
         if not os.path.exists(args.jailbreak):
             print(f"[!] File not found: {args.jailbreak}")
             return
-        with open(args.jailbreak, "r", encoding="utf-8") as f:
+        with open(args.jailbreak, encoding="utf-8") as f:
             prompt = f.read().strip()
         try:
             stream_prompt(creds, prompt, model, stealth, session)
@@ -138,12 +166,12 @@ def main():
         if not os.path.exists(args.batch):
             print(f"[!] File not found: {args.batch}")
             return
-        with open(args.batch, "r", encoding="utf-8") as f:
+        with open(args.batch, encoding="utf-8") as f:
             prompts = [line.strip() for line in f if line.strip()]
         results = []
         try:
             for i, p in enumerate(prompts):
-                print(f"  [{i+1}/{len(prompts)}] {p[:60]}")
+                print(f"  [{i + 1}/{len(prompts)}] {p[:60]}")
                 r = stream_prompt(creds, p, model, stealth, session)
                 results.append({"prompt": p, "response": r or ""})
                 if i < len(prompts) - 1:

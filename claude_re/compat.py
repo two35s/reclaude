@@ -1,4 +1,5 @@
 """Runtime compat: UTF-8 stdio + optional HTTP backends."""
+
 import sys
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,7 @@ if sys.platform == "win32":
 
 try:
     from curl_cffi import requests as cffi_requests  # type: ignore
+
     HAS_CFFI = True
 except ImportError:
     cffi_requests = None  # type: ignore

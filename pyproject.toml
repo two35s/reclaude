@@ -1,0 +1,12 @@
+# Lint + format: `.venv/bin/python -m ruff check .` / `.venv/bin/python -m ruff format --check .`
+# Tests: `.venv/bin/python -m pytest -q`
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "FURB"]
+ignore = ["E501", "UP022"] # width is the formatter's job; capture_output refactor not worth it
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

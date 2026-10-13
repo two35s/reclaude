@@ -8,6 +8,7 @@ network runs in a worker thread and streams tokens back through a queue.
 
 Standard library only (curses + threading).
 """
+
 import contextlib
 import curses
 import io
@@ -31,7 +32,7 @@ COMMANDS = [
 
 def trunc(s, n):
     s = str(s)
-    return s if len(s) <= n else s[:max(0, n - 1)] + "…"
+    return s if len(s) <= n else s[: max(0, n - 1)] + "…"
 
 
 def box_frame(width, left="", right=""):
@@ -104,11 +105,11 @@ class App:
         self.stealth = stealth
         self.model = model
         self.state = {}
-        self.messages = []            # (role, text); live text mutates in place
+        self.messages = []  # (role, text); live text mutates in place
         self.buf = ""
         self.cur = 0
-        self.off = 0                  # scroll offset from bottom; 0 = following
-        self.dialog = None            # None | "models" | "help"
+        self.off = 0  # scroll offset from bottom; 0 = following
+        self.dialog = None  # None | "models" | "help"
         self.sel = 0
         self.queue = queue.Queue()
         self.busy = False
@@ -127,13 +128,11 @@ class App:
         self.messages.append(live)
         self.off = 0
         self.busy = True
-        threading.Thread(target=self._worker, args=(live, text),
-                         daemon=True).start()
+        threading.Thread(target=self._worker, args=(live, text), daemon=True).start()
 
     def cmd_items(self):
         """Slash completions for the current input; resets selection on change."""
-        if (not self.buf.startswith("/") or " " in self.buf
-                or self.dialog or self.busy):
+        if not self.buf.startswith("/") or " " in self.buf or self.dialog or self.busy:
             return []
         if self.buf != self._cmd_buf:
             self._cmd_buf, self.cmd_sel = self.buf, 0
@@ -167,10 +166,15 @@ class App:
     def _worker(self, live, text):
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                stream_prompt(self.creds, text, self.model, self.stealth,
-                              self.state,
-                              on_text=lambda t: self.queue.put(("text", t)))
-        except Exception as e:                       # noqa: BLE001
+                stream_prompt(
+                    self.creds,
+                    text,
+                    self.model,
+                    self.stealth,
+                    self.state,
+                    on_text=lambda t: self.queue.put(("text", t)),
+                )
+        except Exception as e:
             self.queue.put(("note", f"error: {e}"))
         self.queue.put(("done", None))
 
@@ -216,8 +220,12 @@ class App:
         if curses.COLORS >= 256:
             pairs = [(255, -1), (244, -1), (114, -1), (203, -1)]
         else:
-            pairs = [(curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
-                     (curses.COLOR_GREEN, -1), (curses.COLOR_RED, -1)]
+            pairs = [
+                (curses.COLOR_WHITE, -1),
+                (curses.COLOR_WHITE, -1),
+                (curses.COLOR_GREEN, -1),
+                (curses.COLOR_RED, -1),
+            ]
         for i, (fg, bg) in enumerate(pairs, 1):
             try:
                 curses.init_pair(i, fg, bg)
@@ -230,7 +238,7 @@ class App:
     # ── run loop ─────────────────────────────────────────────
     def run(self, scr):
         curses.curs_set(1)
-        curses.raw()                # cbreak keeps ^O/^Q for the tty; raw gives them to us
+        curses.raw()  # cbreak keeps ^O/^Q for the tty; raw gives them to us
         self._colors()
         scr.keypad(True)
         scr.timeout(80)
@@ -271,7 +279,7 @@ class App:
 
     def _header(self, scr, w):
         scr.addstr(0, 0, " reclaude ", curses.A_BOLD)
-        scr.addstr(0, 10, self.model[:max(0, w - 12)], self.attr("user"))
+        scr.addstr(0, 10, self.model[: max(0, w - 12)], self.attr("user"))
 
     def _messages(self, scr, h, w):
         top, bottom = 1, layout(h)[0]
@@ -282,11 +290,11 @@ class App:
             lines.append(("", ""))
         if self.off <= 0:
             self.off = 0
-            view = lines[-(bottom - top):]
+            view = lines[-(bottom - top) :]
         else:
             self.off = min(self.off, max(0, len(lines) - (bottom - top)))
             end = len(lines) - self.off
-            view = lines[max(0, end - (bottom - top)):end]
+            view = lines[max(0, end - (bottom - top)) : end]
         for i, (text, kind) in enumerate(view):
             a = self.attr(kind)
             if kind == "user":
@@ -297,10 +305,10 @@ class App:
         _, compact = layout(h)
         maxw = max(1, w - 6)
         start = max(0, self.cur - maxw + 1)
-        if compact:                       # short screen: prompt line only
+        if compact:  # short screen: prompt line only
             scr.addstr(h - 2, 0, " " * (w - 1))
             scr.addstr(h - 2, 0, "> ", self.attr("user") | curses.A_BOLD)
-            scr.addstr(h - 2, 2, self.buf[start:start + maxw])
+            scr.addstr(h - 2, 2, self.buf[start : start + maxw])
             if not self.buf and not self.busy:
                 scr.addstr(h - 2, 2, "type + enter", self.attr("dim"))
             try:
@@ -320,7 +328,7 @@ class App:
         scr.addstr(mid, 2, "> ", self.attr("user") | curses.A_BOLD)
         maxw = max(1, w - 6)
         start = max(0, self.cur - maxw + 1)
-        scr.addstr(mid, 4, self.buf[start:start + maxw])
+        scr.addstr(mid, 4, self.buf[start : start + maxw])
         if not self.buf:
             hint = "waiting for reply…" if self.busy else "type a message, enter to send"
             scr.addstr(mid, 4, hint[:maxw], self.attr("dim"))
@@ -346,7 +354,7 @@ class App:
             a = self.attr("panel")
             if i == self.cmd_sel % len(items):
                 a |= curses.A_REVERSE
-            scr.addstr(y + 1 + i, 2, f"{c:<9} {d}"[:bw - 4], a)
+            scr.addstr(y + 1 + i, 2, f"{c:<9} {d}"[: bw - 4], a)
 
     def _footer(self, scr, h, w):
         if self.busy:
@@ -362,12 +370,16 @@ class App:
             items = [f"{a:<12} {f}" for a, f in MODEL_ALIASES.items()]
             title, hint, selectable = "model", "enter pick · esc close", True
         else:
-            items = ["/new new conversation", "/model [name] switch model",
-                     "/models list models", "/help this list", "/quit exit",
-                     "enter send · ↑↓ scroll · esc clear · ^c quit"]
+            items = [
+                "/new new conversation",
+                "/model [name] switch model",
+                "/models list models",
+                "/help this list",
+                "/quit exit",
+                "enter send · ↑↓ scroll · esc clear · ^c quit",
+            ]
             title, hint, selectable = "commands", "any key closes", False
-        x, y, bw, bh, vis = dialog_window(
-            h, w, len(items), title, hint, max(len(i) for i in items))
+        x, y, bw, bh, vis = dialog_window(h, w, len(items), title, hint, max(len(i) for i in items))
         for r in range(bh):
             scr.addstr(y + r, x, " " * (bw - 1), self.attr("panel"))
         top, bot = box_frame(bw, title, hint)
@@ -377,11 +389,11 @@ class App:
             scr.addstr(y + r, x, "│", self.attr("dim"))
             scr.addstr(y + r, x + bw - 1, "│", self.attr("dim"))
         start = max(0, min(self.sel - vis + 1, len(items) - vis)) if selectable else 0
-        for i, item in enumerate(items[start:start + vis]):
+        for i, item in enumerate(items[start : start + vis]):
             a = self.attr("panel")
             if selectable and start + i == self.sel:
                 a |= curses.A_REVERSE
-            scr.addstr(y + 1 + i, x + 2, item[:bw - 4], a)
+            scr.addstr(y + 1 + i, x + 2, item[: bw - 4], a)
 
     # ── input ────────────────────────────────────────────────
     def key(self, ch):
@@ -428,10 +440,10 @@ class App:
             self.cur = len(self.buf)
         elif ch in (curses.KEY_BACKSPACE, 127, 8):
             if self.cur > 0:
-                self.buf = self.buf[:self.cur - 1] + self.buf[self.cur:]
+                self.buf = self.buf[: self.cur - 1] + self.buf[self.cur :]
                 self.cur -= 1
         elif ch == curses.KEY_DC:
-            self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
+            self.buf = self.buf[: self.cur] + self.buf[self.cur + 1 :]
         elif ch == 27:
             self.buf, self.cur = "", 0
         elif ch == 9:
@@ -440,7 +452,7 @@ class App:
                 self.buf = items[self.cmd_sel % len(items)][0] + " "
                 self.cur = len(self.buf)
         elif 32 <= ch < 0x110000:
-            self.buf = self.buf[:self.cur] + chr(ch) + self.buf[self.cur:]
+            self.buf = self.buf[: self.cur] + chr(ch) + self.buf[self.cur :]
             self.cur += 1
         return True
 
@@ -461,9 +473,9 @@ class App:
             return False
         if ch == 27:
             self.dialog = None
-        elif ch in (curses.KEY_UP,):
+        elif ch == curses.KEY_UP:
             self.sel = (self.sel - 1) % len(names)
-        elif ch in (curses.KEY_DOWN,):
+        elif ch == curses.KEY_DOWN:
             self.sel = (self.sel + 1) % len(names)
         elif ch in (10, 13):
             self.set_model(names[self.sel])

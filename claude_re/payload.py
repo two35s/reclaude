@@ -1,4 +1,5 @@
 """Fresh per-request payload builder."""
+
 import copy
 import uuid
 

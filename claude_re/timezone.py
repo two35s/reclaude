@@ -1,4 +1,5 @@
 """System IANA timezone detection."""
+
 import datetime
 import os
 import sys
@@ -9,10 +10,10 @@ def detect_timezone():
     # Method 1: Python 3.9+ datetime.astimezone()
     try:
         tz = datetime.datetime.now().astimezone().tzinfo
-        if hasattr(tz, 'key'):
+        if hasattr(tz, "key"):
             return tz.key
         name = tz.tzname(datetime.datetime.now())
-        if name and '/' in name:
+        if name and "/" in name:
             return name
     except Exception:
         pass
@@ -22,7 +23,7 @@ def detect_timezone():
     # symlink is the reliable way to recover the real IANA zone name.
     try:
         tz_env = os.environ.get("TZ", "").strip()
-        if tz_env and '/' in tz_env:
+        if tz_env and "/" in tz_env:
             return tz_env
     except Exception:
         pass
@@ -32,7 +33,7 @@ def detect_timezone():
         marker = "/zoneinfo/"
         if marker in link:
             zone = link.split(marker, 1)[1]
-            if zone and '/' in zone:
+            if zone and "/" in zone:
                 return zone
     except Exception:
         pass
@@ -40,8 +41,9 @@ def detect_timezone():
     # Method 3: try tzlocal (if installed)
     try:
         from tzlocal import get_localzone
+
         tz = str(get_localzone())
-        if tz and '/' in tz:
+        if tz and "/" in tz:
             return tz
     except ImportError:
         pass
@@ -50,8 +52,10 @@ def detect_timezone():
     if sys.platform == "win32":
         try:
             import winreg
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation")
+
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation"
+            )
             tz_name, _ = winreg.QueryValueEx(key, "TimeZoneKeyName")
             winreg.CloseKey(key)
             _win_to_iana = {
@@ -75,7 +79,7 @@ def detect_timezone():
     try:
         with open("/etc/timezone") as f:
             tz = f.read().strip()
-            if tz and '/' in tz:
+            if tz and "/" in tz:
                 return tz
     except Exception:
         pass

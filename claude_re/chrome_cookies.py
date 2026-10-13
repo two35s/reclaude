@@ -13,6 +13,7 @@ Not supported:
 Decryption uses the system `openssl` binary for AES-128-CBC. No cookies leave
 the machine; only the claude.ai rows are read.
 """
+
 import glob
 import hashlib
 import os
@@ -22,30 +23,68 @@ import subprocess
 import sys
 import tempfile
 
-from .config import (AES_BLOCK_SIZE, AES_IV_SIZE,
-                     CHROME_COOKIE_SCHEMA_VERSION_V24,
-                     PBKDF2_ITERATIONS_LINUX, PBKDF2_ITERATIONS_MAC)
+from .config import (
+    AES_BLOCK_SIZE,
+    AES_IV_SIZE,
+    CHROME_COOKIE_SCHEMA_VERSION_V24,
+    PBKDF2_ITERATIONS_LINUX,
+    PBKDF2_ITERATIONS_MAC,
+)
 
 # Browser family → (profile root, Keychain service, Keychain account, PBKDF2 iters)
 _MAC_BROWSERS = {
-    "Chrome":   ("~/Library/Application Support/Google/Chrome",
-                 "Chrome Safe Storage", "Chrome", PBKDF2_ITERATIONS_MAC),
-    "Chromium": ("~/Library/Application Support/Chromium",
-                 "Chromium Safe Storage", "Chromium", PBKDF2_ITERATIONS_MAC),
-    "Brave":    ("~/Library/Application Support/BraveSoftware/Brave-Browser",
-                 "Brave Safe Storage", "Brave", PBKDF2_ITERATIONS_MAC),
-    "Edge":     ("~/Library/Application Support/Microsoft Edge",
-                 "Microsoft Edge Safe Storage", "Microsoft Edge", PBKDF2_ITERATIONS_MAC),
+    "Chrome": (
+        "~/Library/Application Support/Google/Chrome",
+        "Chrome Safe Storage",
+        "Chrome",
+        PBKDF2_ITERATIONS_MAC,
+    ),
+    "Chromium": (
+        "~/Library/Application Support/Chromium",
+        "Chromium Safe Storage",
+        "Chromium",
+        PBKDF2_ITERATIONS_MAC,
+    ),
+    "Brave": (
+        "~/Library/Application Support/BraveSoftware/Brave-Browser",
+        "Brave Safe Storage",
+        "Brave",
+        PBKDF2_ITERATIONS_MAC,
+    ),
+    "Edge": (
+        "~/Library/Application Support/Microsoft Edge",
+        "Microsoft Edge Safe Storage",
+        "Microsoft Edge",
+        PBKDF2_ITERATIONS_MAC,
+    ),
 }
 _LINUX_BROWSERS = {
-    "Chrome":   ("~/.config/google-chrome", None, None, PBKDF2_ITERATIONS_LINUX),
+    "Chrome": ("~/.config/google-chrome", None, None, PBKDF2_ITERATIONS_LINUX),
     "Chromium": ("~/.config/chromium", None, None, PBKDF2_ITERATIONS_LINUX),
-    "Brave":    ("~/.config/BraveSoftware/Brave-Browser", None, None, PBKDF2_ITERATIONS_LINUX),
+    "Brave": ("~/.config/BraveSoftware/Brave-Browser", None, None, PBKDF2_ITERATIONS_LINUX),
 }
 
 
 class CookieExtractionError(RuntimeError):
     """Raised when no usable claude.ai session can be read from a profile."""
+
+
+_OPENSSL_CANDIDATES = (
+    "/opt/homebrew/opt/openssl/bin/openssl",
+    "/usr/local/opt/openssl/bin/openssl",
+    "/usr/bin/openssl",
+)
+
+
+def _tool_path(name, *absolute_candidates):
+    """Resolve a helper binary, preferring absolute paths over PATH lookup."""
+    for p in absolute_candidates:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    found = shutil.which(name)
+    if found:
+        return found
+    raise CookieExtractionError(f"system '{name}' not found — required for cookie extraction")
 
 
 def _browser_table():
@@ -56,7 +95,8 @@ def _profile_dirs(root):
     """Return [Default, Profile *] dirs under a browser root that hold cookies."""
     dirs = []
     for name in ["Default"] + sorted(
-            os.path.basename(p) for p in glob.glob(os.path.join(root, "Profile *"))):
+        os.path.basename(p) for p in glob.glob(os.path.join(root, "Profile *"))
+    ):
         d = os.path.join(root, name)
         if os.path.exists(os.path.join(d, "Cookies")):
             dirs.append(d)
@@ -65,8 +105,13 @@ def _profile_dirs(root):
 
 def _info_for(profile_dir, browser):
     _root, service, account, iters = _browser_table()[browser]
-    return {"browser": browser, "dir": profile_dir, "service": service,
-            "account": account, "iterations": iters}
+    return {
+        "browser": browser,
+        "dir": profile_dir,
+        "service": service,
+        "account": account,
+        "iterations": iters,
+    }
 
 
 def _browser_for_profile(profile_dir):
@@ -101,30 +146,41 @@ def list_profiles(explicit=None):
         if os.path.isdir(root):
             out.extend(_info_for(d, browser) for d in _profile_dirs(root))
     if not out:
-        raise CookieExtractionError(
-            "no Chrome/Chromium profile found — pass --from-chrome PROFILE")
+        raise CookieExtractionError("no Chrome/Chromium profile found — pass --from-chrome PROFILE")
     return out
 
 
 def _password(info):
     if sys.platform == "darwin":
-        print("[*] Requesting the browser Keychain key "
-              "(click Allow/Always Allow if macOS prompts)...")
+        print(
+            "[*] Requesting the browser Keychain key (click Allow/Always Allow if macOS prompts)..."
+        )
         try:
             out = subprocess.run(
-                ["security", "find-generic-password", "-w",
-                 "-s", info["service"], "-a", info["account"]],
-                capture_output=True, text=True, timeout=120)
+                [
+                    _tool_path("security", "/usr/bin/security"),
+                    "find-generic-password",
+                    "-w",
+                    "-s",
+                    info["service"],
+                    "-a",
+                    info["account"],
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
         except FileNotFoundError:
             raise CookieExtractionError("macOS 'security' tool not found")
         except subprocess.TimeoutExpired:
             raise CookieExtractionError(
-                "Keychain access timed out — approve the macOS prompt "
-                "(Always Allow) and retry")
+                "Keychain access timed out — approve the macOS prompt (Always Allow) and retry"
+            )
         if out.returncode != 0 or not out.stdout.strip():
             raise CookieExtractionError(
                 f"could not read '{info['service']}' from the Keychain "
-                "(access denied or item missing)")
+                "(access denied or item missing)"
+            )
         return out.stdout.rstrip("\n").encode()
     return b"peanuts"  # Linux v10
 
@@ -132,15 +188,29 @@ def _password(info):
 def _aes_decrypt(ciphertext, key, iv=b" " * AES_IV_SIZE):
     try:
         p = subprocess.run(
-            ["openssl", "enc", "-aes-128-cbc", "-d", "-nopad",
-             "-K", key.hex(), "-iv", iv.hex()],
-            input=ciphertext, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            [
+                _tool_path("openssl", *_OPENSSL_CANDIDATES),
+                "enc",
+                "-aes-128-cbc",
+                "-d",
+                "-nopad",
+                "-K",
+                key.hex(),
+                "-iv",
+                iv.hex(),
+            ],
+            input=ciphertext,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     except FileNotFoundError:
         raise CookieExtractionError(
-            "system 'openssl' not found — required to decrypt Chrome cookies")
+            "system 'openssl' not found — required to decrypt Chrome cookies"
+        )
     if p.returncode != 0 or not p.stdout:
         raise CookieExtractionError(
-            "openssl decryption failed (unexpected cookie format or wrong key)")
+            "openssl decryption failed (unexpected cookie format or wrong key)"
+        )
     return p.stdout
 
 
@@ -179,10 +249,10 @@ def _read_cookie_rows(db_path):
         try:
             rows = con.execute(
                 "SELECT name, host_key, encrypted_value, value FROM cookies "
-                "WHERE host_key LIKE '%claude.ai%'").fetchall()
+                "WHERE host_key LIKE '%claude.ai%'"
+            ).fetchall()
             try:
-                ver = con.execute(
-                    "SELECT value FROM meta WHERE key='version'").fetchone()
+                ver = con.execute("SELECT value FROM meta WHERE key='version'").fetchone()
                 version = int(ver[0]) if ver else 0
             except (sqlite3.Error, TypeError, ValueError):
                 version = 0
@@ -210,8 +280,7 @@ def read_claude_cookies(explicit=None):
         if not rows:
             continue
         try:
-            key = hashlib.pbkdf2_hmac("sha1", _password(info), b"saltysalt",
-                                      info["iterations"], 16)
+            key = hashlib.pbkdf2_hmac("sha1", _password(info), b"saltysalt", info["iterations"], 16)
         except CookieExtractionError as e:
             errors.append(f"{info['dir']}: {e}")
             continue
@@ -228,7 +297,7 @@ def read_claude_cookies(explicit=None):
             return cookies
 
     if errors:
-        raise CookieExtractionError(
-            "could not read a claude.ai session:\n  " + "\n  ".join(errors))
+        raise CookieExtractionError("could not read a claude.ai session:\n  " + "\n  ".join(errors))
     raise CookieExtractionError(
-        "no claude.ai sessionKey found — log in to claude.ai in Chrome first")
+        "no claude.ai sessionKey found — log in to claude.ai in Chrome first"
+    )

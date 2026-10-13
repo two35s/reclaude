@@ -7,6 +7,7 @@ Speaks just enough Chrome DevTools Protocol over a raw WebSocket to:
 
 No third-party dependencies: socket + ssl + hashlib + json only.
 """
+
 import base64
 import hashlib
 import json
@@ -43,7 +44,8 @@ class CDPConnection:
 
     @staticmethod
     def _handshake(ws_url, timeout):
-        assert ws_url.startswith("ws://"), "only ws:// loopback supported"
+        if not ws_url.startswith("ws://"):
+            raise ValueError("only ws:// loopback supported")
         host_port, _, path = ws_url[5:].partition("/")
         host, _, port = host_port.partition(":")
         port = int(port or 80)
@@ -97,17 +99,17 @@ class CDPConnection:
         if length == 126:
             while len(self._buf) < idx + 2:
                 self._buf += self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
-            length = struct.unpack("!H", self._buf[idx:idx + 2])[0]
+            length = struct.unpack("!H", self._buf[idx : idx + 2])[0]
             idx += 2
         elif length == 127:
             while len(self._buf) < idx + 8:
                 self._buf += self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
-            length = struct.unpack("!Q", self._buf[idx:idx + 8])[0]
+            length = struct.unpack("!Q", self._buf[idx : idx + 8])[0]
             idx += 8
         if masked:
             while len(self._buf) < idx + 4:
                 self._buf += self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
-            mask = self._buf[idx:idx + 4]
+            mask = self._buf[idx : idx + 4]
             idx += 4
         else:
             mask = None
@@ -116,8 +118,8 @@ class CDPConnection:
             if not chunk:
                 raise ConnectionError("CDP socket closed mid-frame")
             self._buf += chunk
-        payload = self._buf[idx:idx + length]
-        self._buf = self._buf[idx + length:]
+        payload = self._buf[idx : idx + length]
+        self._buf = self._buf[idx + length :]
         if mask:
             payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
         return opcode, payload
@@ -132,7 +134,7 @@ class CDPConnection:
             if opcode == 0x8:  # close
                 raise ConnectionError("CDP websocket closed by Chrome")
             if opcode == 0x9:  # ping → pong
-                self._sock.sendall(b"\x8A\x00")
+                self._sock.sendall(b"\x8a\x00")
                 continue
             if opcode == 0xA:  # pong — ignore
                 continue
@@ -146,14 +148,13 @@ class CDPConnection:
     def call(self, method, params=None, timeout=CDP_WEBSOCKET_TIMEOUT):
         self._next_id += 1
         msg_id = self._next_id
-        self._send_text(json.dumps({"id": msg_id, "method": method,
-                                    "params": params or {}}))
+        self._send_text(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
         self._sock.settimeout(timeout)
         try:
             while True:
                 try:
                     text = self._recv_text()
-                except socket.timeout:
+                except TimeoutError:
                     raise TimeoutError(f"CDP {method}: no response")
                 try:
                     msg = json.loads(text)
@@ -169,11 +170,15 @@ class CDPConnection:
 
     def evaluate(self, expression, timeout=CDP_EVALUATE_TIMEOUT):
         """Run JS in the page, awaiting promises. Returns the remote value."""
-        res = self.call("Runtime.evaluate", {
-            "expression": expression,
-            "awaitPromise": True,
-            "returnByValue": True,
-        }, timeout=timeout)
+        res = self.call(
+            "Runtime.evaluate",
+            {
+                "expression": expression,
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            timeout=timeout,
+        )
         remote = res.get("result", {})
         if remote.get("subtype") == "error":
             raise RuntimeError(f"CDP evaluate: {remote.get('description', 'js error')}")
@@ -210,7 +215,9 @@ def extract_session(cdp_port):
                 page = t
                 break
     if page is None or not page.get("webSocketDebuggerUrl"):
-        raise RuntimeError("no debuggable page target found — open claude.ai in the launched Chrome")
+        raise RuntimeError(
+            "no debuggable page target found — open claude.ai in the launched Chrome"
+        )
 
     conn = CDPConnection(page["webSocketDebuggerUrl"])
     try:

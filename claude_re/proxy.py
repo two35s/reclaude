@@ -12,6 +12,9 @@ Usage:
     python -m claude_re --proxy            # default port 8765
     python -m claude_re --proxy --port 9000
 
+Set RECLAUDE_PROXY_TOKEN to require it as a bearer token
+(Authorization: Bearer ...) on every request.
+
 Then register in crushrc:
     provider add reclaude --type openai --base-url "http://localhost:8765/v1"
     model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000
@@ -21,6 +24,7 @@ Or as LOCAL_ENDPOINT for the archived opencode binary:
 """
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -29,6 +33,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from .config import DEFAULT_MODEL, MODEL_ALIASES, resolve_model
 from .streaming import stream_prompt
 
+# Proxy hardening: cap request bodies; optional bearer token via env.
+MAX_BODY_BYTES = 1_000_000
+PROXY_TOKEN = os.environ.get("RECLAUDE_PROXY_TOKEN", "")
 
 # ── Payload translation ────────────────────────────────────────────────────
 
@@ -78,8 +85,7 @@ def _resolve_model_from_openai_id(model_id):
     ('claude-sonnet-5-5'), or prefixed ids ('reclaude/sonnet',
     'reclaude/claude-sonnet-5-5').
     """
-    if model_id.startswith("reclaude/"):
-        model_id = model_id[len("reclaude/"):]
+    model_id = model_id.removeprefix("reclaude/")
     return resolve_model(model_id)
 
 
@@ -96,11 +102,7 @@ def _sse_chunk(content, model, finish_reason=None):
         "choices": [
             {
                 "index": 0,
-                "delta": (
-                    {"content": content}
-                    if content is not None
-                    else {}
-                ),
+                "delta": ({"content": content} if content is not None else {}),
                 "finish_reason": finish_reason,
             }
         ],
@@ -144,16 +146,25 @@ class _Handler(BaseHTTPRequestHandler):
     # ── routing ──────────────────────────────────────────────────────
 
     def do_GET(self):
+        if not self._authorized():
+            self._error(403, "Missing or invalid proxy token")
+            return
         if self.path in ("/v1/models", "/v1/models/"):
             self._list_models()
         else:
             self._not_found()
 
     def do_POST(self):
+        if not self._authorized():
+            self._error(403, "Missing or invalid proxy token")
+            return
         if self.path in ("/v1/chat/completions", "/v1/chat/completions/"):
             self._chat_completions()
         else:
             self._not_found()
+
+    def _authorized(self):
+        return not PROXY_TOKEN or self.headers.get("Authorization") == f"Bearer {PROXY_TOKEN}"
 
     # ── model list ───────────────────────────────────────────────────
 
@@ -168,19 +179,29 @@ class _Handler(BaseHTTPRequestHandler):
             for alias in MODEL_ALIASES
         ]
         # Also expose the default model directly
-        models.append({
-            "id": DEFAULT_MODEL,
-            "object": "model",
-            "created": 0,
-            "owned_by": "reclaude",
-        })
+        models.append(
+            {
+                "id": DEFAULT_MODEL,
+                "object": "model",
+                "created": 0,
+                "owned_by": "reclaude",
+            }
+        )
         body = json.dumps({"object": "list", "data": models}).encode()
         self._send(200, "application/json", body)
 
     # ── chat/completions ─────────────────────────────────────────────
 
     def _chat_completions(self):
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            self._error(400, "Invalid Content-Length")
+            return
+        if length > MAX_BODY_BYTES:
+            self.rfile.read(MAX_BODY_BYTES + 1)  # bounded drain so the 413 is delivered
+            self._error(413, "Request body too large")
+            return
         raw = self.rfile.read(length)
         try:
             req = json.loads(raw)
@@ -250,7 +271,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.creds,
             prompt,
             model=model,
-            stealth=False,           # proxy mode — caller manages lifetime
+            stealth=False,  # proxy mode — caller manages lifetime
             session_state=session_state,
             on_text=on_text,
         )

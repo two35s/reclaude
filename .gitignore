@@ -13,6 +13,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.bak
+.venv/
+.pytest_cache/
+.ruff_cache/
 .monolith.bak
 
 # macOS

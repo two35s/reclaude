@@ -1,4 +1,5 @@
 """Credential load/save/extract/clear."""
+
 import json
 import os
 
@@ -20,19 +21,25 @@ class CredentialManager:
     def load(self):
         if not os.path.exists(CRED_FILE):
             return False
+        if os.name != "nt" and (os.stat(CRED_FILE).st_mode & 0o077):
+            os.chmod(CRED_FILE, 0o600)  # tighten creds left world-readable
+            print(f"[!] Tightened permissions on {CRED_FILE} to user-only.")
         with open(CRED_FILE) as f:
             d = json.load(f)
-        self.org_id      = d.get("org_id")
+        self.org_id = d.get("org_id")
         self.session_key = d.get("session_key")
-        self.cookies     = d.get("cookies", {})
+        self.cookies = d.get("cookies", {})
         return bool(self.org_id and self.session_key)
 
     def save(self):
         # Create the file already user-only (0600), never a wider window.
         fd = os.open(CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump({"org_id": self.org_id, "session_key": self.session_key,
-                       "cookies": self.cookies}, f, indent=2)
+            json.dump(
+                {"org_id": self.org_id, "session_key": self.session_key, "cookies": self.cookies},
+                f,
+                indent=2,
+            )
         print(f"[+] Credentials saved → {CRED_FILE}")
 
     def clear(self):
@@ -184,11 +191,19 @@ class CredentialManager:
         """Best-effort org lookup using the extracted cookies."""
         try:
             from . import http as http_mod
-            headers = {"User-Agent": UA, "Cookie": self.cookie_header(),
-                       "Referer": "https://claude.ai/"}
+
+            headers = {
+                "User-Agent": UA,
+                "Cookie": self.cookie_header(),
+                "Referer": "https://claude.ai/",
+            }
             resp = http_mod.fetch_with_retries(
-                "GET", f"{URL_BASE}/api/organizations", headers=headers,
-                timeout=DEFAULT_TIMEOUT, max_retries=1)
+                "GET",
+                f"{URL_BASE}/api/organizations",
+                headers=headers,
+                timeout=DEFAULT_TIMEOUT,
+                max_retries=1,
+            )
             if resp is not None and resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, list) and data:

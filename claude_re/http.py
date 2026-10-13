@@ -1,4 +1,5 @@
 """HTTP layer: reused session, retries, conversation CRUD."""
+
 import random
 import time
 
@@ -50,12 +51,13 @@ def make_headers(creds):
         "Content-Type": "application/json",
         "Referer": "https://claude.ai/",
         "Origin": "https://claude.ai",
-        "Cookie": creds.cookie_header()
+        "Cookie": creds.cookie_header(),
     }
 
 
-def request(method, url, headers=None, json_body=None, timeout=DEFAULT_TIMEOUT,
-            content_callback=None):
+def request(
+    method, url, headers=None, json_body=None, timeout=DEFAULT_TIMEOUT, content_callback=None
+):
     """Send one request through the best available backend.
 
     Picks the shared session, then curl_cffi, then plain requests. Raises on
@@ -67,18 +69,26 @@ def request(method, url, headers=None, json_body=None, timeout=DEFAULT_TIMEOUT,
             return sess.get(url, headers=headers, timeout=timeout)
         if method == "DELETE":
             return sess.delete(url, headers=headers, timeout=timeout)
-        return sess.post(url, json=json_body, headers=headers, timeout=timeout,
-                         content_callback=content_callback)
+        return sess.post(
+            url, json=json_body, headers=headers, timeout=timeout, content_callback=content_callback
+        )
     if HAS_CFFI:
         if method == "GET":
-            return cffi_requests.get(url, headers=headers,
-                                     impersonate=IMPERSONATE_TARGET, timeout=timeout)
+            return cffi_requests.get(
+                url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=timeout
+            )
         if method == "DELETE":
-            return cffi_requests.delete(url, headers=headers,
-                                        impersonate=IMPERSONATE_TARGET, timeout=timeout)
-        return cffi_requests.post(url, json=json_body, headers=headers,
-                                  impersonate=IMPERSONATE_TARGET,
-                                  content_callback=content_callback, timeout=timeout)
+            return cffi_requests.delete(
+                url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=timeout
+            )
+        return cffi_requests.post(
+            url,
+            json=json_body,
+            headers=headers,
+            impersonate=IMPERSONATE_TARGET,
+            content_callback=content_callback,
+            timeout=timeout,
+        )
     if method == "GET":
         return std_requests.get(url, headers=headers, timeout=timeout)
     if method == "DELETE":
@@ -92,7 +102,7 @@ def delete_conversation(creds, conv_id):
     headers = {
         "User-Agent": UA,
         "Content-Type": "application/json",
-        "Cookie": creds.cookie_header()
+        "Cookie": creds.cookie_header(),
     }
     try:
         request("DELETE", url, headers=headers, timeout=DEFAULT_TIMEOUT)
@@ -100,8 +110,14 @@ def delete_conversation(creds, conv_id):
         pass  # best-effort cleanup
 
 
-def fetch_with_retries(method, url, headers=None, json_body=None, timeout=DEFAULT_TIMEOUT,
-                       max_retries=DEFAULT_MAX_RETRIES):
+def fetch_with_retries(
+    method,
+    url,
+    headers=None,
+    json_body=None,
+    timeout=DEFAULT_TIMEOUT,
+    max_retries=DEFAULT_MAX_RETRIES,
+):
     """Transient-error retry with exponential backoff + jitter.
 
     Retries only 429/5xx and network errors. Returns response or None.
@@ -110,8 +126,7 @@ def fetch_with_retries(method, url, headers=None, json_body=None, timeout=DEFAUL
     last_resp = None
     for attempt in range(max_retries + 1):
         try:
-            resp = request(method, url, headers=headers, json_body=json_body,
-                           timeout=timeout)
+            resp = request(method, url, headers=headers, json_body=json_body, timeout=timeout)
         except Exception:
             resp = None
         if resp is None:
@@ -124,14 +139,14 @@ def fetch_with_retries(method, url, headers=None, json_body=None, timeout=DEFAUL
             if resp.status_code == 429:
                 try:
                     ra = resp.headers.get("Retry-After", "")
-                    wait = int(ra) if ra else 2 ** attempt
+                    wait = int(ra) if ra else 2**attempt
                 except Exception:
-                    wait = 2 ** attempt
+                    wait = 2**attempt
                 wait = min(wait, MAX_RETRY_WAIT) + random.uniform(0, RETRY_AFTER_JITTER_RANGE)
                 time.sleep(wait)
                 continue
         if attempt < max_retries:
-            time.sleep(min(2 ** attempt, MAX_BACKOFF_DELAY) + random.uniform(0, BACKOFF_JITTER_RANGE))
+            time.sleep(min(2**attempt, MAX_BACKOFF_DELAY) + random.uniform(0, BACKOFF_JITTER_RANGE))
     return last_resp
 
 
@@ -147,11 +162,12 @@ def create_conversation(creds, conv_id, model):
         "Content-Type": "application/json",
         "Referer": "https://claude.ai/",
         "Origin": "https://claude.ai",
-        "Cookie": creds.cookie_header()
+        "Cookie": creds.cookie_header(),
     }
     payload = {"name": "", "model": model, "uuid": conv_id}
-    resp = fetch_with_retries("POST", url, headers=headers,
-                              json_body=payload, timeout=CONVERSATION_TIMEOUT, max_retries=2)
+    resp = fetch_with_retries(
+        "POST", url, headers=headers, json_body=payload, timeout=CONVERSATION_TIMEOUT, max_retries=2
+    )
     if resp is None:
         print("[!] Could not reach the server to start a conversation.")
         return False
@@ -170,4 +186,3 @@ def create_conversation(creds, conv_id, model):
     else:
         print(f"[!] Could not create conversation (HTTP {resp.status_code}): {body[:160]}")
     return False
-

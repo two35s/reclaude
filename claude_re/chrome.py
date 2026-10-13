@@ -1,4 +1,5 @@
 """Real-Chrome helpers (credential extraction / login only)."""
+
 import os
 import shutil
 import socket
@@ -45,18 +46,20 @@ def find_chrome():
 def get_free_port():
     """Get a random free port from the OS."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
+        s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
 def _wait_for_cdp(cdp_port, timeout=CDP_TIMEOUT):
     """Poll /json/version until DevTools answers or timeout."""
     import urllib.request
+
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{cdp_port}/json/version",
-                                        timeout=2) as r:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{cdp_port}/json/version", timeout=2
+            ) as r:
                 if r.status == 200:
                     return True
         except Exception:
@@ -80,7 +83,7 @@ def launch_real_chrome(chrome_path, url="https://claude.ai"):
         f"--user-data-dir={PROFILE}",
         "--no-first-run",
         "--no-default-browser-check",
-        url
+        url,
     ]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
