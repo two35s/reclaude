@@ -38,7 +38,7 @@ def _sse_data(line):
 
 
 def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
-                  session_state=None, _rate_retries=0):
+                  session_state=None, _rate_retries=0, on_text=None):
     """Send prompt with real-time streaming. Returns full response text.
 
     Session memory: uses ONE conversation for the entire session.
@@ -64,6 +64,13 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     endpoint = (f"{URL_BASE}/api/organizations/{creds.org_id}"
                 f"/chat_conversations/{conv_id}/completion")
     headers = http_mod.make_headers(creds)
+
+    def emit(txt):
+        if on_text:
+            on_text(txt)
+        else:
+            sys.stdout.write(txt)
+            sys.stdout.flush()
 
     parts = []
     buffer = b""  # bytes: join chunks before decoding so UTF-8 never splits
@@ -91,8 +98,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
                 if delta.get("type") == "text_delta":
                     txt = delta.get("text", "")
                     parts.append(txt)
-                    sys.stdout.write(txt)
-                    sys.stdout.flush()
+                    emit(txt)
             elif t == "error":
                 err = obj.get("error", {})
                 print(f"\n[!] {err.get('message', str(obj))}")
@@ -127,8 +133,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
                     if delta.get("type") == "text_delta":
                         txt = delta.get("text", "")
                         parts.append(txt)
-                        sys.stdout.write(txt)
-                        sys.stdout.flush()
+                        emit(txt)
 
     # ── Check status / detect errors ───────────────────────
     if resp:
@@ -187,7 +192,8 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
                 print(f"\n[!] 403: {error_body[:200]}")
         elif sc == 429:
             return handle_rate_limit(resp, creds, prompt, model, stealth,
-                                     session_state, _retries=_rate_retries)
+                                     session_state, _retries=_rate_retries,
+                                     on_text=on_text)
         else:
             print(f"\n[!] HTTP {sc}: {error_body[:200]}")
         return None
@@ -203,7 +209,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
 
 
 def handle_rate_limit(resp, creds, prompt, model, stealth,
-                      session_state=None, _retries=0, _max_retries=2):
+                      session_state=None, _retries=0, _max_retries=2, on_text=None):
     """Handle 429: honor Retry-After, fallback to haiku once, bounded retries.
 
     Preserves session_state so conversation memory survives the retry.
@@ -232,7 +238,7 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
     if model != haiku_id:
         print("[*] Falling back to haiku...")
         return stream_prompt(creds, prompt, haiku_id, stealth,
-                             session_state, _rate_retries=_retries)
+                             session_state, _rate_retries=_retries, on_text=on_text)
 
     # Already on haiku — wait with jitter and retry (bounded)
     wait = 30
@@ -244,4 +250,4 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
     print(f"[*] Waiting {wait:.1f}s (attempt {_retries + 1}/{MAX_RETRIES})...")
     time.sleep(wait)
     return stream_prompt(creds, prompt, model, stealth, session_state,
-                         _rate_retries=_retries + 1)
+                         _rate_retries=_retries + 1, on_text=on_text)
