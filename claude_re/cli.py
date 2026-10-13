@@ -14,12 +14,6 @@ from .streaming import stream_prompt
 
 
 def main():
-    print()
-    print("  ╔════════════════════════════════════════════════════╗")
-    print("  ║  Claude.ai RE Client v4 — Secure + Stealth        ║")
-    print("  ╚════════════════════════════════════════════════════╝")
-    print()
-
     ap = argparse.ArgumentParser(description="Claude.ai Security Research Client v4")
     ap.add_argument("--login",         action="store_true", help="Browser login (save profile)")
     ap.add_argument("--auto-fetch",    action="store_true", help="Auto-extract creds via Chrome+CDP")
@@ -75,10 +69,17 @@ def main():
         return
 
     # ── Dashboard (opencode's own stats CLI, scoped to this project) ──
+    # Runs before the banner so --json stays pipeable pure JSON.
     if args.stats:
         from .stats import run_stats
         run_stats(args)
         return
+
+    print()
+    print("  ╔════════════════════════════════════════════════════╗")
+    print("  ║  Claude.ai RE Client v4 — Secure + Stealth        ║")
+    print("  ╚════════════════════════════════════════════════════╝")
+    print()
 
     # ── Credential resolution ────────────────────────────
     creds = CredentialManager()
