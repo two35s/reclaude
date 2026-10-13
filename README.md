@@ -27,10 +27,16 @@ Terminal client for Claude.ai — no API key. Replays your own browser session a
 
 ```bash
 git clone <your-reclaude-url> && cd reclaude
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
 Requires Python 3.9+ and Google Chrome (only for the one-time credential capture).
+
+> The commands below assume the venv is active. If you skip activation, prefix
+> them with `.venv/bin/` (e.g. `.venv/bin/python -m claude_re`). On macOS/Linux
+> there is often no bare `python` — use the venv, not the system `python3`.
 
 ---
 
