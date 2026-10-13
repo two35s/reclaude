@@ -31,8 +31,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
             # First prompt in session — create a new conversation
             conv_id = str(uuid.uuid4())
             if not http_mod.create_conversation(creds, conv_id, model):
-                print("\n[!] Failed to create conversation. Session may be expired.")
-                return None
+                return None  # reason already printed by create_conversation
             session_state["conv_id"] = conv_id
             session_state["created"] = True
         conv_id = session_state["conv_id"]

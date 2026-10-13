@@ -23,29 +23,21 @@ IMPERSONATE_TARGET = "chrome136"
 DEFAULT_MODEL = "claude-sonnet-5-5"
 
 # Model IDs mirror api anthropic naming (claude-<family>-<version>).
-# Tier labels are best-effort: FREE = historically usable on free tier,
-# PRO = needs Pro/Max. Verify with `/models refresh` — server discovery wins.
+# Only entries verified against the live server belong here; unknown names
+# still pass through unchanged. The server advertises the current generation
+# (below) in its system prompt; per-account availability depends on the plan.
 MODEL_ALIASES = {
-    # ── Current generation ────────────────────
+    # ── Current generation (server-advertised) ─
     "haiku":        "claude-haiku-5-5",
-    "sonnet":       "claude-sonnet-5-5",          # latest, default
+    "sonnet":       "claude-sonnet-5-5",          # default
+    "opus":         "claude-opus-5-5",            # pro/max
+    "fable":        "claude-fable-5",             # pro/specialized
+    # ── Previous generation ────────────────────
     "sonnet-5":     "claude-sonnet-5",
-    "opus":         "claude-opus-5-5",
-    "opus-5":       "claude-opus-5",
-    # ── Previous generation ───────────────────
-    "haiku-4-5":    "claude-haiku-4-5",
     "sonnet-4-6":   "claude-sonnet-4-6",
-    "sonnet-4-5":   "claude-sonnet-4-5",          # previous sonnet
-    "opus-4-8":     "claude-opus-4-8",
-    "opus-4-7":     "claude-opus-4-7",
-    "opus-4-6":     "claude-opus-4-6",
-    # ── Dated snapshots ───────────────────────
+    "haiku-4-5":    "claude-haiku-4-5",
+    # ── Dated snapshots ────────────────────────
     "haiku-snap":   "claude-haiku-4-5-20251001",
-    "sonnet-snap":  "claude-sonnet-4-5-20250929",
-    # ── Premium / specialized ─────────────────
-    "opus-3":       "claude-3-opus-20240229",
-    "fable":        "claude-fable-5",
-    "mythos":       "claude-mythos-5",
 }
 
 

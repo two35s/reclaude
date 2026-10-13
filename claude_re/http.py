@@ -120,7 +120,11 @@ def fetch_with_retries(method, url, headers=None, json_body=None, timeout=15,
 
 
 def create_conversation(creds, conv_id, model):
-    """Create a new conversation on the server (required before posting completion)."""
+    """Create a new conversation on the server (required before posting completion).
+
+    Returns True on success. On failure, prints the server's reason (e.g. an
+    unsupported model or an expired session) so the caller can just bail out.
+    """
     url = f"{URL_BASE}/api/organizations/{creds.org_id}/chat_conversations"
     headers = {
         "User-Agent": UA,
@@ -130,13 +134,26 @@ def create_conversation(creds, conv_id, model):
         "Cookie": creds.cookie_header()
     }
     payload = {"name": "", "model": model, "uuid": conv_id}
-    try:
-        resp = fetch_with_retries("POST", url, headers=headers,
-                                  json_body=payload, timeout=15,
-                                  max_retries=2)
-        return resp is not None and resp.status_code in (200, 201)
-    except Exception:
+    resp = fetch_with_retries("POST", url, headers=headers,
+                              json_body=payload, timeout=15, max_retries=2)
+    if resp is None:
+        print(f"[!] Could not reach the server to start a conversation.")
         return False
+    if resp.status_code in (200, 201):
+        return True
+    try:
+        body = resp.text[:300]
+    except Exception:
+        body = ""
+    low = body.lower()
+    if "unsupported model" in low:
+        print(f"[!] Model '{model}' is not available on your account (HTTP {resp.status_code}).")
+        print("    Try: /model sonnet   (or another alias from the README)")
+    elif resp.status_code in (401, 403):
+        print("[!] Session invalid or expired. Run --from-chrome or --auto-fetch")
+    else:
+        print(f"[!] Could not create conversation (HTTP {resp.status_code}): {body[:160]}")
+    return False
 
 
 def fetch_available_models(creds, force=False):

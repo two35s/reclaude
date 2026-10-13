@@ -141,26 +141,22 @@ python -m claude_re --clear-session                  # wipe stored credentials
 
 ## Models
 
-| Shortcut | Full name | Tier |
+Aliases map to full model ids; any full id can also be passed directly.
+
+| Shortcut | Model id | Availability |
 |---|---|---|
 | `haiku` | `claude-haiku-5-5` | free |
 | `sonnet` | `claude-sonnet-5-5` | free — default |
 | `sonnet-5` | `claude-sonnet-5` | free |
-| `haiku-4-5` | `claude-haiku-4-5` | free |
 | `sonnet-4-6` | `claude-sonnet-4-6` | free |
-| `sonnet-4-5` | `claude-sonnet-4-5` | free |
+| `haiku-4-5` | `claude-haiku-4-5` | free |
 | `haiku-snap` | `claude-haiku-4-5-20251001` | free |
-| `sonnet-snap` | `claude-sonnet-4-5-20250929` | free |
 | `opus` | `claude-opus-5-5` | pro/max |
-| `opus-5` | `claude-opus-5` | pro/max |
-| `opus-4-8` | `claude-opus-4-8` | pro/max |
-| `opus-4-7` | `claude-opus-4-7` | pro/max |
-| `opus-4-6` | `claude-opus-4-6` | pro/max |
-| `opus-3` | `claude-3-opus-20240229` | pro/max |
 | `fable` | `claude-fable-5` | pro/specialized |
-| `mythos` | `claude-mythos-5` | pro/specialized |
 
-Unknown names pass through unchanged. On HTTP 429 the client falls back to Haiku once, then waits per `Retry-After` (with jitter, bounded retries).
+Availability depends on your plan, and the server is the final authority: an unsupported model returns a clear `Model '<id>' is not available on your account` message. Full ids that aren't aliased pass through unchanged.
+
+On HTTP 429 the client falls back to Haiku once, then waits per `Retry-After` (with jitter, bounded retries).
 
 ---
 
