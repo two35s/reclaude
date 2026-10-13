@@ -7,7 +7,7 @@ import sys
 import uuid
 
 from . import chrome as chrome_mod
-from .config import CRED_FILE
+from .config import CRED_FILE, UA, URL_BASE
 
 
 class CredentialManager:
@@ -175,6 +175,63 @@ class CredentialManager:
             return True
         print("[!] No sessionKey cookie found")
         return False
+
+    # ── From an already-logged-in Chrome profile ─────────
+
+    def from_chrome(self, profile=None):
+        """Read claude.ai cookies from a local Chrome profile (no re-login).
+
+        `profile` may be a profile dir, a browser root, or a path to a
+        Cookies file; None auto-discovers Chrome/Chromium/Brave/Edge.
+        """
+        from . import chrome_cookies
+
+        print("[*] Reading claude.ai session from local Chrome profile...")
+        try:
+            cookies = chrome_cookies.read_claude_cookies(profile)
+        except chrome_cookies.CookieExtractionError as e:
+            print(f"[!] {e}")
+            return False
+
+        self.cookies = cookies
+        self.session_key = cookies.get("sessionKey")
+        self.org_id = cookies.get("lastActiveOrg")
+
+        if not self.session_key:
+            print("[!] No sessionKey cookie — log in to claude.ai in Chrome first.")
+            return False
+
+        if not self.org_id:
+            print("[*] No lastActiveOrg cookie; asking the API for your org id...")
+            self.org_id = self._fetch_org_id()
+        if not self.org_id:
+            print("[!] Could not determine org_id (session may be anonymous).")
+            return False
+
+        if not self.conv_id:
+            self.conv_id = str(uuid.uuid4())
+
+        print(f"[+] org_id:      {self.org_id}")
+        print(f"[+] session key: {self.session_key[:25]}...")
+        self.save()
+        return True
+
+    def _fetch_org_id(self):
+        """Best-effort org lookup using the extracted cookies."""
+        try:
+            from . import http as http_mod
+            headers = {"User-Agent": UA, "Cookie": self.cookie_header(),
+                       "Referer": "https://claude.ai/"}
+            resp = http_mod.fetch_with_retries(
+                "GET", f"{URL_BASE}/api/organizations", headers=headers,
+                timeout=10, max_retries=1)
+            if resp is not None and resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list) and data:
+                    return data[0].get("uuid") or data[0].get("id")
+        except Exception:
+            pass
+        return None
 
     # ── Helpers ──────────────────────────────────────────
 

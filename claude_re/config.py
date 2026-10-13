@@ -44,8 +44,8 @@ MODEL_ALIASES = {
     "sonnet-snap":  "claude-sonnet-4-5-20250929",
     # ── Premium / specialized ─────────────────
     "opus-3":       "claude-3-opus-20240229",
-    "fable":        "claude-fable-5-1",
-    "mythos":       "claude-mythos-5-1",
+    "fable":        "claude-fable-5",
+    "mythos":       "claude-mythos-5",
 }
 
 

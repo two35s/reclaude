@@ -24,6 +24,8 @@ def main():
     ap = argparse.ArgumentParser(description="Claude.ai Security Research Client v4")
     ap.add_argument("--login",         action="store_true", help="Browser login (save profile)")
     ap.add_argument("--auto-fetch",    action="store_true", help="Auto-extract creds via Chrome+CDP")
+    ap.add_argument("--from-chrome",   nargs="?", const="", default=None, metavar="PROFILE",
+                    help="Extract creds from an already-logged-in Chrome profile")
     ap.add_argument("--manual",        action="store_true", help="Manual credential input")
     ap.add_argument("--prompt",        type=str, help="Single prompt to send")
     ap.add_argument("--model",         type=str, default="sonnet",
@@ -56,6 +58,10 @@ def main():
     if args.auto_fetch:
         if not creds.auto_fetch():
             print("[!] Auto-fetch failed")
+            return
+    elif args.from_chrome is not None:
+        if not creds.from_chrome(args.from_chrome or None):
+            print("[!] Chrome extraction failed")
             return
     elif args.manual:
         creds.manual_input()

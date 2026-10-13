@@ -1,5 +1,6 @@
 """System IANA timezone detection."""
 import datetime
+import os
 import sys
 
 
@@ -16,7 +17,27 @@ def detect_timezone():
     except Exception:
         pass
 
-    # Method 2: try tzlocal (if installed)
+    # Method 2: TZ env var, then /etc/localtime symlink (macOS + Linux).
+    # `astimezone()` above only yields a fixed offset on most systems, so the
+    # symlink is the reliable way to recover the real IANA zone name.
+    try:
+        tz_env = os.environ.get("TZ", "").strip()
+        if tz_env and '/' in tz_env:
+            return tz_env
+    except Exception:
+        pass
+
+    try:
+        link = os.path.realpath("/etc/localtime")
+        marker = "/zoneinfo/"
+        if marker in link:
+            zone = link.split(marker, 1)[1]
+            if zone and '/' in zone:
+                return zone
+    except Exception:
+        pass
+
+    # Method 3: try tzlocal (if installed)
     try:
         from tzlocal import get_localzone
         tz = str(get_localzone())
@@ -25,7 +46,7 @@ def detect_timezone():
     except ImportError:
         pass
 
-    # Method 3: Windows registry
+    # Method 4: Windows registry
     if sys.platform == "win32":
         try:
             import winreg
@@ -50,7 +71,7 @@ def detect_timezone():
         except Exception:
             pass
 
-    # Method 4: /etc/timezone (Linux)
+    # Method 5: /etc/timezone (Linux)
     try:
         with open("/etc/timezone") as f:
             tz = f.read().strip()

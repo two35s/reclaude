@@ -14,12 +14,15 @@ from .payload import build_payload
 
 
 def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
-                  session_state=None):
+                  session_state=None, _rate_retries=0):
     """Send prompt with real-time streaming. Returns full response text.
 
     Session memory: uses ONE conversation for the entire session.
     If stealth=True, that conversation is deleted when the session ends (not per-prompt).
     session_state dict tracks: {'conv_id': str, 'created': bool}
+
+    _rate_retries is internal: it threads the rate-limit retry budget through
+    the 429 -> handle_rate_limit -> stream_prompt cycle so retries stay bounded.
     """
 
     # Determine conv_id: session-persistent or creds-based
@@ -133,13 +136,23 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
             try:
                 err_obj = json.loads(full_raw.strip())
                 if err_obj.get("type") == "error":
-                    msg = err_obj.get("error", {}).get("message", str(err_obj))
-                    code = err_obj.get("error", {}).get("error_code", "")
-                    if "model" in code or "model" in msg.lower():
+                    err = err_obj.get("error", {}) or {}
+                    msg = err.get("message", str(err_obj))
+                    code = err.get("error_code") or err.get("code") or ""
+                    low = f"{code} {msg}".lower()
+                    if status_code[0] == 429:
+                        pass  # 429s fall through to handle_rate_limit() below
+                    elif ("account_session_invalid" in low
+                          or "invalid authorization" in low
+                          or "authentication_error" in low):
+                        print("\n[!] Session invalid or expired. Run --auto-fetch")
+                        return None
+                    elif "model" in code or "model" in msg.lower():
                         print(f"\n[!] Model '{model}' not available: {msg}")
+                        return None
                     else:
                         print(f"\n[!] Error: {msg}")
-                    return None
+                        return None
             except json.JSONDecodeError:
                 pass
             error_body = full_raw[:500]
@@ -157,14 +170,18 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
         elif sc == 401:
             print("\n[!] Session expired. Run --auto-fetch")
         elif sc == 403:
-            if "model" in error_body.lower():
+            low = error_body.lower()
+            if ("account_session_invalid" in low or "invalid authorization" in low
+                    or "authentication_error" in low):
+                print("\n[!] Session invalid or expired. Run --auto-fetch")
+            elif "model" in low:
                 print(f"\n[!] Model '{model}' not available on your account tier.")
                 print("    Try: /model sonnet")
             else:
                 print(f"\n[!] 403: {error_body[:200]}")
         elif sc == 429:
             return handle_rate_limit(resp, creds, prompt, model, stealth,
-                                     session_state)
+                                     session_state, _retries=_rate_retries)
         else:
             print(f"\n[!] HTTP {sc}: {error_body[:200]}")
         return None
@@ -203,12 +220,13 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
 
     print(f"\n[!] Rate limited. Retry after: {retry}s")
 
-    # Auto-fallback to haiku if not already on it (single hop, keep session)
+    # Auto-fallback to haiku if not already on it (single hop, keep session).
+    # Carry the retry budget so a rate-limited haiku still terminates.
     haiku_id = MODEL_ALIASES.get("haiku", "claude-haiku-5-5")
     if model != haiku_id:
         print("[*] Falling back to haiku...")
         return stream_prompt(creds, prompt, haiku_id, stealth,
-                             session_state)
+                             session_state, _rate_retries=_retries)
 
     # Already on haiku — wait with jitter and retry (bounded)
     wait = 30
@@ -219,8 +237,5 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
     wait = min(wait, 300) + random.uniform(0, 1.5)
     print(f"[*] Waiting {wait:.1f}s (attempt {_retries + 1}/{MAX_RETRIES})...")
     time.sleep(wait)
-    first = stream_prompt(creds, prompt, model, stealth, session_state)
-    if first is None and _retries + 1 < MAX_RETRIES:
-        return handle_rate_limit(resp, creds, prompt, model, stealth,
-                                 session_state, _retries + 1, MAX_RETRIES)
-    return first
+    return stream_prompt(creds, prompt, model, stealth, session_state,
+                         _rate_retries=_retries + 1)

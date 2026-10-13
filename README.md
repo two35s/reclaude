@@ -46,6 +46,12 @@ python -m claude_re --auto-fetch
 
 # Alternative: paste values from DevTools → Network → 'completion' request
 python -m claude_re --manual
+
+# Simplest: reuse a browser you're already logged into (no second login)
+python -m claude_re --from-chrome
+# auto-discovers Chrome/Chromium/Brave/Edge on macOS/Linux; pass a path to
+# pick a specific profile:
+python -m claude_re --from-chrome "~/Library/Application Support/Google/Chrome/Default"
 ```
 
 ### 2. Chat
@@ -92,8 +98,8 @@ python -m claude_re --clear-session          # wipe stored credentials
 | `opus-4-7` | `claude-opus-4-7` | pro/max |
 | `opus-4-6` | `claude-opus-4-6` | pro/max |
 | `opus-3` | `claude-3-opus-20240229` | pro/max |
-| `fable` | `claude-fable-5-1` | pro/specialized |
-| `mythos` | `claude-mythos-5-1` | pro/specialized |
+| `fable` | `claude-fable-5` | pro/specialized |
+| `mythos` | `claude-mythos-5` | pro/specialized |
 
 Unknown names pass through as-is. On 429 the client falls back to Haiku once, then waits per `Retry-After` (with jitter, bounded retries).
 
@@ -112,6 +118,7 @@ reclaude/
 │   ├── creds.py      # CredentialManager
 │   ├── cdp.py        # stdlib-only CDP client (no playwright needed)
 │   ├── chrome.py     # real-Chrome launch / login
+│   ├── chrome_cookies.py # read/decrypt session from an existing Chrome profile
 │   ├── payload.py    # per-request payload builder
 │   ├── http.py       # session reuse, retries, model discovery
 │   ├── streaming.py  # SSE parsing, rate-limit handling
@@ -128,6 +135,7 @@ Protocol details live where they belong: fingerprint + session reuse in `http.py
 - **Your `sessionKey` is a password.** Anyone holding the credential file (`~/.config/claude_re/claude_session.json`, `%APPDATA%\claude_re\` on Windows) has full access to your Claude.ai account. Never share, upload, or commit it.
 - Credentials are stored as **plaintext JSON** (owner-only `600` on Unix). Run `--clear-session` when done, and log out in the browser to invalidate the session if exposed.
 - The Chrome profile (`claude_profile/`) also holds a logged-in session — same handling applies.
+- `--from-chrome` reads your normal browser profile's cookie DB and asks the OS for the browser's storage key (macOS Keychain; Linux `peanuts`). Click **Always Allow** to avoid repeat prompts; AES decryption shells out to the system `openssl`.
 - The terminal prints the first ~25 chars of the session key during `--auto-fetch`; avoid screen-sharing that step.
 
 ---
