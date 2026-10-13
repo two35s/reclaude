@@ -140,8 +140,12 @@ def _aes_decrypt(ciphertext, key, iv=b" " * 16):
     return p.stdout
 
 
-def _decrypt(enc, key):
-    """Decrypt one Chrome cookie value (v10/v11 AES-128-CBC)."""
+def _decrypt(enc, key, strip_prefix=False):
+    """Decrypt one Chrome cookie value (v10/v11 AES-128-CBC).
+
+    strip_prefix drops the leading 32-byte SHA256(domain) that Chrome >= 130
+    (schema version >= 24) prepends, instead of guessing from the bytes.
+    """
     if isinstance(enc, str):
         enc = enc.encode("utf-8", "surrogateescape")
     if enc[:3] not in (b"v10", b"v11"):
@@ -150,17 +154,17 @@ def _decrypt(enc, key):
     pad = pt[-1]
     if 1 <= pad <= 16:  # strip PKCS7 padding
         pt = pt[:-pad]
-    # Chrome >= 130 prepends a 32-byte SHA256(domain) hash.
-    if len(pt) > 32:
-        try:
-            pt.decode("utf-8")
-        except UnicodeDecodeError:
-            pt = pt[32:]
+    if strip_prefix and len(pt) > 32:
+        pt = pt[32:]
     return pt.decode("utf-8", "replace")
 
 
 def _read_cookie_rows(db_path):
-    """Copy the DB (plus WAL/SHM) so a running Chrome doesn't lock us out."""
+    """Copy the DB (plus WAL/SHM) so a running Chrome doesn't lock us out.
+
+    Returns (rows, schema_version); Chrome >= 130 stores version >= 24 and
+    prefixes each encrypted value with a 32-byte SHA256(domain).
+    """
     tmp = tempfile.mkdtemp(prefix="claude_re_ck_")
     try:
         for suffix in ("", "-wal", "-shm"):
@@ -169,9 +173,16 @@ def _read_cookie_rows(db_path):
                 shutil.copy2(src, os.path.join(tmp, "Cookies" + suffix))
         con = sqlite3.connect(os.path.join(tmp, "Cookies"))
         try:
-            return con.execute(
+            rows = con.execute(
                 "SELECT name, host_key, encrypted_value, value FROM cookies "
                 "WHERE host_key LIKE '%claude.ai%'").fetchall()
+            try:
+                ver = con.execute(
+                    "SELECT value FROM meta WHERE key='version'").fetchone()
+                version = int(ver[0]) if ver else 0
+            except (sqlite3.Error, TypeError, ValueError):
+                version = 0
+            return rows, version
         finally:
             con.close()
     finally:
@@ -188,7 +199,7 @@ def read_claude_cookies(explicit=None):
     for info in list_profiles(explicit):
         db = os.path.join(info["dir"], "Cookies")
         try:
-            rows = _read_cookie_rows(db)
+            rows, version = _read_cookie_rows(db)
         except Exception as e:  # unreadable/corrupt profile — keep trying
             errors.append(f"{db}: {e}")
             continue
@@ -201,10 +212,11 @@ def read_claude_cookies(explicit=None):
             errors.append(f"{info['dir']}: {e}")
             continue
 
+        strip_prefix = version >= 24
         cookies = {}
         for name, _host, enc, val in rows:
             try:
-                cookies[name] = _decrypt(enc, key) if enc else val
+                cookies[name] = _decrypt(enc, key, strip_prefix) if enc else val
             except CookieExtractionError as e:
                 errors.append(f"{info['dir']}: {name}: {e}")
         if cookies.get("sessionKey"):

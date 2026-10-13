@@ -1,21 +1,16 @@
 """Credential load/save/extract/clear."""
 import json
 import os
-import re
-import stat
-import sys
-import uuid
 
 from . import chrome as chrome_mod
 from .config import CRED_FILE, UA, URL_BASE
 
 
 class CredentialManager:
-    """Manages Claude.ai session credentials (org_id, conv_id, cookies)."""
+    """Manages Claude.ai session credentials (org_id, cookies)."""
 
     def __init__(self):
         self.org_id = None
-        self.conv_id = None
         self.cookies = {}
         self.session_key = None
 
@@ -27,28 +22,21 @@ class CredentialManager:
         with open(CRED_FILE) as f:
             d = json.load(f)
         self.org_id      = d.get("org_id")
-        self.conv_id     = d.get("conv_id")
         self.session_key = d.get("session_key")
         self.cookies     = d.get("cookies", {})
         return bool(self.org_id and self.session_key)
 
     def save(self):
-        with open(CRED_FILE, "w") as f:
-            json.dump({"org_id": self.org_id, "conv_id": self.conv_id,
-                       "session_key": self.session_key,
+        # Create the file already user-only (0600), never a wider window.
+        fd = os.open(CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"org_id": self.org_id, "session_key": self.session_key,
                        "cookies": self.cookies}, f, indent=2)
-        # Restrict file permissions (user-only read/write)
-        try:
-            if sys.platform != "win32":
-                os.chmod(CRED_FILE, stat.S_IRUSR | stat.S_IWUSR)  # 600
-        except Exception:
-            pass
         print(f"[+] Credentials saved → {CRED_FILE}")
 
     def clear(self):
         """Wipe credentials from disk and memory."""
         self.org_id = None
-        self.conv_id = None
         self.session_key = None
         self.cookies = {}
         if os.path.exists(CRED_FILE):
@@ -66,15 +54,10 @@ class CredentialManager:
         print("\n  Steps:")
         print("  1. Open https://claude.ai — send a message")
         print("  2. DevTools (F12) → Network → find 'completion' request")
-        print("  3. URL has /organizations/{org_id}/chat_conversations/{conv_id}/")
+        print("  3. URL has /organizations/{org_id}/ — copy that org_id")
         print("  4. Copy the Cookie header value\n")
 
         self.org_id = input("  org_id: ").strip()
-        self.conv_id = input("  conv_id (or 'new'): ").strip()
-        if self.conv_id.lower() == "new":
-            self.conv_id = str(uuid.uuid4())
-            print(f"  [+] Generated conv_id: {self.conv_id}")
-
         raw = input("  Cookie header: ").strip()
         self._parse_cookies(raw)
         self.save()
@@ -121,20 +104,12 @@ class CredentialManager:
         print("    1. Pass Cloudflare (automatic in real Chrome)")
         print("    2. Log in if needed")
         print("    3. Open a chat and send any message")
-        print("    4. Copy the chat URL from address bar")
         input("\n  Press ENTER when done (keep Chrome open)...")
-
-        url_input = input("  Paste the chat URL (or press Enter to skip): ").strip()
-        if url_input:
-            m = re.search(r'/chat/([a-f0-9\-]+)', url_input)
-            if m:
-                self.conv_id = m.group(1)
-                print(f"[+] conv_id: {self.conv_id}")
 
         # Connect via CDP to extract cookies + org_id (stdlib client)
         print("[*] Connecting to Chrome via CDP to extract cookies...")
         try:
-            cookies, page_url = cdp_mod.extract_session(cdp_port)
+            cookies = cdp_mod.extract_session(cdp_port)
         except Exception as e:
             print(f"[!] CDP connection failed: {e}")
             print("    Make sure Chrome is still open.")
@@ -155,15 +130,6 @@ class CredentialManager:
                 print(f"[+] org_id: {self.org_id}")
         except Exception:
             pass
-
-        # Fallback conv_id from page URL
-        if not self.conv_id and page_url:
-            m = re.search(r'/chat/([a-f0-9\-]+)', page_url)
-            if m:
-                self.conv_id = m.group(1)
-
-        if not self.conv_id:
-            self.conv_id = str(uuid.uuid4())
 
         # Done — close Chrome
         print("[*] Closing Chrome...")
@@ -207,9 +173,6 @@ class CredentialManager:
         if not self.org_id:
             print("[!] Could not determine org_id (session may be anonymous).")
             return False
-
-        if not self.conv_id:
-            self.conv_id = str(uuid.uuid4())
 
         print(f"[+] org_id:      {self.org_id}")
         print(f"[+] session key: {self.session_key[:25]}...")

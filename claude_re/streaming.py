@@ -8,9 +8,33 @@ import time
 import uuid
 
 from . import http as http_mod
-from .compat import HAS_CFFI, cffi_requests, std_requests
-from .config import DEFAULT_MODEL, DIR, IMPERSONATE_TARGET, MODEL_ALIASES, URL_BASE
+from .compat import HAS_CFFI
+from .config import DEFAULT_MODEL, DIR, MODEL_ALIASES, URL_BASE
 from .payload import build_payload
+
+
+def _split_lines(buffer, chunk):
+    """Append a chunk and return (remaining_buffer, complete_lines).
+
+    Bytes are joined before splitting so a UTF-8 character split across two
+    network chunks is decoded whole instead of as two replacement characters.
+    """
+    buffer += chunk
+    lines = []
+    while b"\n" in buffer:
+        line, buffer = buffer.split(b"\n", 1)
+        lines.append(line)
+    return buffer, lines
+
+
+def _sse_data(line):
+    """Return the payload of one SSE 'data:' line, or None if it is not one."""
+    if isinstance(line, bytes):
+        line = line.decode("utf-8", errors="replace")
+    line = line.strip()
+    if not line.startswith("data: "):
+        return None
+    return line[6:]
 
 
 def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
@@ -25,18 +49,16 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     the 429 -> handle_rate_limit -> stream_prompt cycle so retries stay bounded.
     """
 
-    # Determine conv_id: session-persistent or creds-based
-    if session_state is not None:
-        if not session_state.get("conv_id"):
-            # First prompt in session — create a new conversation
-            conv_id = str(uuid.uuid4())
-            if not http_mod.create_conversation(creds, conv_id, model):
-                return None  # reason already printed by create_conversation
-            session_state["conv_id"] = conv_id
-            session_state["created"] = True
-        conv_id = session_state["conv_id"]
-    else:
-        conv_id = creds.conv_id
+    # One server-side conversation per session, created on the first prompt.
+    if session_state is None:
+        session_state = {}
+    if not session_state.get("conv_id"):
+        conv_id = str(uuid.uuid4())
+        if not http_mod.create_conversation(creds, conv_id, model):
+            return None  # reason already printed by create_conversation
+        session_state["conv_id"] = conv_id
+        session_state["created"] = True
+    conv_id = session_state["conv_id"]
 
     payload = build_payload(prompt, model)
     endpoint = (f"{URL_BASE}/api/organizations/{creds.org_id}"
@@ -44,22 +66,19 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     headers = http_mod.make_headers(creds)
 
     parts = []
-    buffer = ""
+    buffer = b""  # bytes: join chunks before decoding so UTF-8 never splits
     raw_body = []  # capture everything for error detection
     error_body = ""
     status_code = [0]  # mutable for callback scope
 
     def on_chunk(chunk: bytes):
         nonlocal buffer
-        text = chunk.decode("utf-8", errors="replace")
-        raw_body.append(text)
-        buffer += text
-        while "\n" in buffer:
-            line, buffer = buffer.split("\n", 1)
-            line = line.strip()
-            if not line or not line.startswith("data: "):
+        raw_body.append(chunk)
+        buffer, lines = _split_lines(buffer, chunk)
+        for raw_line in lines:
+            data = _sse_data(raw_line)
+            if data is None:
                 continue
-            data = line[6:]
             if data.strip() == "[DONE]":
                 return
             try:
@@ -83,31 +102,19 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     # ── Send request (reused session + consistent fingerprint) ─
     resp = None
     try:
-        sess = http_mod.get_session()
-        if sess is not None:
-            resp = sess.post(
-                endpoint, json=payload, headers=headers,
-                content_callback=on_chunk, timeout=120)
-        elif HAS_CFFI:
-            resp = cffi_requests.post(
-                endpoint, json=payload, headers=headers,
-                impersonate=IMPERSONATE_TARGET, content_callback=on_chunk, timeout=120)
-        else:
-            # Fallback: standard requests with full body parse
-            resp = std_requests.post(
-                endpoint, json=payload, headers=headers, timeout=120)
+        resp = http_mod.request("POST", endpoint, headers=headers,
+                                json_body=payload, timeout=120,
+                                content_callback=on_chunk)
     except Exception as e:
         print(f"\n[!] Request error: {e}")
 
     # ── Handle non-streaming fallback ────────────────────
     if resp and not HAS_CFFI:
         if resp.status_code == 200:
-            text = resp.text
-            for line in text.split("\n"):
-                line = line.strip()
-                if not line or not line.startswith("data: "):
+            for line in resp.text.split("\n"):
+                data = _sse_data(line)
+                if data is None:
                     continue
-                data = line[6:]
                 if data.strip() == "[DONE]":
                     break
                 try:
@@ -129,7 +136,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
 
     # If callback got data but no SSE parts, check raw body for errors
     if not parts:
-        full_raw = "".join(raw_body) + buffer
+        full_raw = b"".join(raw_body).decode("utf-8", "replace")
         if full_raw:
             # Try parsing as JSON error
             try:

@@ -13,7 +13,6 @@ A terminal client for Claude.ai. It replays your own browser session against Cla
 - **Multi-turn memory** — one server-side conversation per terminal session.
 - **Stealth cleanup** — optionally deletes that conversation on exit so it never shows in your browser sidebar.
 - **Three ways to authenticate** — import an existing Chrome login, launch a capture browser, or paste cookies by hand.
-- **Model discovery** — merges server-advertised models with the built-in list.
 
 ---
 
@@ -60,7 +59,7 @@ Choose one method. All of them save the same credential file.
 |---|---|---|
 | `--from-chrome` | Reads and decrypts cookies from a browser you're already logged into. **Recommended** — no second login. | macOS, Linux |
 | `--auto-fetch` | Launches a dedicated Chrome profile, then extracts the session over local CDP. | macOS, Linux, Windows |
-| `--manual` | You paste `org_id`, `conv_id`, and the `Cookie` header from DevTools. | Any |
+| `--manual` | You paste `org_id` and the `Cookie` header from DevTools. | Any |
 
 ### `--from-chrome`
 
@@ -82,7 +81,7 @@ macOS will ask for the browser's `... Safe Storage` key from the Keychain — cl
 python -m claude_re --auto-fetch
 ```
 
-A real Chrome window opens. Log in, open a chat, send one message, then return to the terminal and press ENTER. Paste the chat URL when asked and the session is extracted automatically.
+A real Chrome window opens. Log in, open a chat, send one message, then return to the terminal and press ENTER. The session is extracted automatically over local CDP.
 
 ### `--manual`
 
@@ -90,7 +89,7 @@ A real Chrome window opens. Log in, open a chat, send one message, then return t
 python -m claude_re --manual
 ```
 
-Follow the on-screen prompts: open a `completion` request in DevTools → Network, copy its `Cookie` header, and provide the `org_id` / `conv_id` from its URL.
+Follow the on-screen prompts: open a `completion` request in DevTools → Network, copy its `Cookie` header, and provide the `org_id` from its URL.
 
 ---
 
@@ -102,7 +101,6 @@ python -m claude_re --prompt "explain SSE"           # single prompt
 python -m claude_re --model haiku                    # choose a model
 python -m claude_re --no-stealth                     # keep chats in browser history
 python -m claude_re --batch prompts.txt              # one prompt per line → batch_results.json
-python -m claude_re --models-refresh                 # refresh the model list first
 python -m claude_re --clear-session                  # wipe stored credentials
 ```
 
@@ -113,14 +111,13 @@ python -m claude_re --clear-session                  # wipe stored credentials
 | `--from-chrome [PROFILE]` | Import a session from an existing browser profile (auto-discovers; pass a path to narrow it). |
 | `--auto-fetch` | Launch Chrome and extract the session over CDP. |
 | `--login` | Open Chrome to log in and save the profile, without extracting. |
-| `--manual` | Enter `org_id` / `conv_id` / `Cookie` header by hand. |
+| `--manual` | Enter `org_id` / `Cookie` header by hand. |
 | `--prompt TEXT` | Send a single prompt, then exit. |
 | `--model NAME` | Model alias or full id (default: `sonnet`). |
 | `--batch FILE` | Send one prompt per line; writes `batch_results.json`. |
 | `--jailbreak FILE` | Send the contents of a file as the prompt. |
 | `--no-stealth` | Keep the server-side conversation after exit. |
-| `--models-refresh` | Refresh the model list from the server before running. |
-| `--org-id` / `--conv-id` / `--cookie` | Supply credentials inline instead of a saved file. |
+| `--org-id` / `--cookie` | Supply credentials inline instead of a saved file. |
 | `--clear-session` | Delete the stored credential file. |
 
 ### REPL commands
@@ -128,8 +125,7 @@ python -m claude_re --clear-session                  # wipe stored credentials
 | Command | Effect |
 |---|---|
 | `/model <name>` | Switch model (starts a new conversation). |
-| `/models` | List models (cached discovery + built-ins). |
-| `/models refresh` | Force a refresh from the server. |
+| `/models` | List available models. |
 | `/stealth on\|off` | Toggle conversation cleanup on exit. |
 | `/new` | Start a fresh conversation. |
 | `/cleanup` | Delete the session conversation now. |
@@ -192,7 +188,7 @@ reclaude/
 │   ├── chrome.py          # launch / login helpers
 │   ├── chrome_cookies.py  # read + decrypt an existing browser profile
 │   ├── payload.py         # per-request payload builder
-│   ├── http.py            # session reuse, retries, model discovery
+│   ├── http.py            # session reuse, retries, request backend
 │   ├── streaming.py       # SSE parsing, rate-limit handling
 │   └── repl.py            # help + model listing
 └── requirements.txt

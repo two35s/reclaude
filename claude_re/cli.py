@@ -3,12 +3,11 @@ import argparse
 import json
 import os
 import time
-import uuid
 
 from . import http as http_mod
 from .chrome import do_login
 from .compat import HAS_CFFI
-from .config import CRED_FILE, DIR, MODEL_ALIASES, SYSTEM_TIMEZONE, resolve_model
+from .config import CRED_FILE, DIR, SYSTEM_TIMEZONE, resolve_model
 from .creds import CredentialManager
 from .repl import print_help, print_models
 from .streaming import stream_prompt
@@ -31,14 +30,11 @@ def main():
     ap.add_argument("--model",         type=str, default="sonnet",
                     help="Model: haiku/sonnet/opus (default: sonnet)")
     ap.add_argument("--org-id",        type=str, help="Organization ID")
-    ap.add_argument("--conv-id",       type=str, help="Conversation ID")
     ap.add_argument("--cookie",        type=str, help="Full Cookie header string")
     ap.add_argument("--jailbreak",     type=str, help="Read prompt from file")
     ap.add_argument("--batch",         type=str, help="Send multiple prompts from file")
     ap.add_argument("--no-stealth",    action="store_true", help="Disable stealth mode")
     ap.add_argument("--clear-session", action="store_true", help="Delete stored credentials")
-    ap.add_argument("--models-refresh", action="store_true",
-                    help="Refresh model list from server before running")
     args = ap.parse_args()
 
     # ── Clear session ────────────────────────────────────
@@ -67,7 +63,6 @@ def main():
         creds.manual_input()
     elif args.org_id and args.cookie:
         creds.org_id = args.org_id
-        creds.conv_id = args.conv_id or str(uuid.uuid4())
         creds._parse_cookies(args.cookie)
         creds.save()
     elif not creds.load():
@@ -81,12 +76,6 @@ def main():
     # ── State ────────────────────────────────────────────
     model = resolve_model(args.model)
     stealth = not args.no_stealth
-
-    if args.models_refresh:
-        model_map = http_mod.fetch_available_models(creds, force=True)
-        print(f"[+] Model list refreshed ({len(model_map)} entries)")
-        if model not in model_map.values() and model not in model_map:
-            print(f"[!] Warning: model '{model}' not in refreshed list")
 
     # Session state: tracks the current conversation for memory
     # Created lazily on first prompt, deleted on exit if stealth
@@ -178,12 +167,7 @@ def main():
                 if cmd == "/help":
                     print_help()
                 elif cmd == "/models":
-                    if arg.lower() == "refresh":
-                        aliases = http_mod.fetch_available_models(creds, force=True)
-                        print("  [+] Model list refreshed")
-                    else:
-                        aliases = http_mod.fetch_available_models(creds)
-                    print_models(model, aliases)
+                    print_models(model)
                 elif cmd == "/model":
                     if not arg:
                         print(f"  Current: {model}")

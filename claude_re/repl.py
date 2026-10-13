@@ -9,7 +9,6 @@ def print_help():
   ╠══════════════════════════════════════════════════════╣
   ║  /model <name>     Switch model                     ║
   ║  /models           List all models                  ║
-  ║  /models refresh   Refresh model list from server   ║
   ║  /stealth on|off   Toggle cleanup on exit           ║
   ║  /new              Start fresh conversation         ║
   ║  /cleanup          Delete session conv NOW          ║

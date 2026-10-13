@@ -12,7 +12,7 @@ if sys.platform == "win32":
     _CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "claude_re")
 else:
     _CONFIG_DIR = os.path.expanduser("~/.config/claude_re")
-os.makedirs(_CONFIG_DIR, exist_ok=True)
+os.makedirs(_CONFIG_DIR, mode=0o700, exist_ok=True)
 CRED_FILE = os.path.join(_CONFIG_DIR, "claude_session.json")
 
 URL_BASE = "https://claude.ai"
@@ -65,6 +65,3 @@ PAYLOAD_TEMPLATE = {
     "sync_sources": []
 }
 
-# Discovered-model cache (TTL) — merged over static MODEL_ALIASES.
-MODEL_CACHE = {"ts": 0.0, "models": None}
-MODEL_CACHE_TTL = 3600

@@ -1,9 +1,9 @@
-"""HTTP layer: reused session, retries, conversation CRUD, model discovery."""
+"""HTTP layer: reused session, retries, conversation CRUD."""
 import random
 import time
 
 from .compat import HAS_CFFI, cffi_requests, std_requests
-from .config import IMPERSONATE_TARGET, MODEL_ALIASES, MODEL_CACHE, MODEL_CACHE_TTL, UA, URL_BASE
+from .config import IMPERSONATE_TARGET, UA, URL_BASE
 
 _HTTP_SESSION = None
 
@@ -44,6 +44,38 @@ def make_headers(creds):
     }
 
 
+def request(method, url, headers=None, json_body=None, timeout=15,
+            content_callback=None):
+    """Send one request through the best available backend.
+
+    Picks the shared session, then curl_cffi, then plain requests. Raises on
+    transport error; callers decide whether that is retryable.
+    """
+    sess = get_session()
+    if sess is not None:
+        if method == "GET":
+            return sess.get(url, headers=headers, timeout=timeout)
+        if method == "DELETE":
+            return sess.delete(url, headers=headers, timeout=timeout)
+        return sess.post(url, json=json_body, headers=headers, timeout=timeout,
+                         content_callback=content_callback)
+    if HAS_CFFI:
+        if method == "GET":
+            return cffi_requests.get(url, headers=headers,
+                                     impersonate=IMPERSONATE_TARGET, timeout=timeout)
+        if method == "DELETE":
+            return cffi_requests.delete(url, headers=headers,
+                                        impersonate=IMPERSONATE_TARGET, timeout=timeout)
+        return cffi_requests.post(url, json=json_body, headers=headers,
+                                  impersonate=IMPERSONATE_TARGET,
+                                  content_callback=content_callback, timeout=timeout)
+    if method == "GET":
+        return std_requests.get(url, headers=headers, timeout=timeout)
+    if method == "DELETE":
+        return std_requests.delete(url, headers=headers, timeout=timeout)
+    return std_requests.post(url, json=json_body, headers=headers, timeout=timeout)
+
+
 def delete_conversation(creds, conv_id):
     """Delete a conversation so it doesn't appear in browser sidebar."""
     url = f"{URL_BASE}/api/organizations/{creds.org_id}/chat_conversations/{conv_id}"
@@ -53,13 +85,7 @@ def delete_conversation(creds, conv_id):
         "Cookie": creds.cookie_header()
     }
     try:
-        sess = get_session()
-        if sess is not None:
-            sess.delete(url, headers=headers, timeout=10)
-        elif HAS_CFFI:
-            cffi_requests.delete(url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=10)
-        elif std_requests:
-            std_requests.delete(url, headers=headers, timeout=10)
+        request("DELETE", url, headers=headers, timeout=10)
     except Exception:
         pass  # best-effort cleanup
 
@@ -74,28 +100,8 @@ def fetch_with_retries(method, url, headers=None, json_body=None, timeout=15,
     last_resp = None
     for attempt in range(max_retries + 1):
         try:
-            sess = get_session()
-            if sess is not None:
-                if method == "GET":
-                    resp = sess.get(url, headers=headers, timeout=timeout)
-                else:
-                    resp = sess.post(url, json=json_body, headers=headers,
-                                     timeout=timeout)
-            elif HAS_CFFI:
-                if method == "GET":
-                    resp = cffi_requests.get(url, headers=headers,
-                                             impersonate=IMPERSONATE_TARGET,
-                                             timeout=timeout)
-                else:
-                    resp = cffi_requests.post(url, json=json_body, headers=headers,
-                                              impersonate=IMPERSONATE_TARGET,
-                                              timeout=timeout)
-            else:
-                if method == "GET":
-                    resp = std_requests.get(url, headers=headers, timeout=timeout)
-                else:
-                    resp = std_requests.post(url, json=json_body, headers=headers,
-                                             timeout=timeout)
+            resp = request(method, url, headers=headers, json_body=json_body,
+                           timeout=timeout)
         except Exception:
             resp = None
         if resp is None:
@@ -155,43 +161,3 @@ def create_conversation(creds, conv_id, model):
         print(f"[!] Could not create conversation (HTTP {resp.status_code}): {body[:160]}")
     return False
 
-
-def fetch_available_models(creds, force=False):
-    """Best-effort discovery of server-side models, cached for MODEL_CACHE_TTL.
-
-    Tries the organizations endpoint (already used in auto_fetch) and merges
-    any model identifiers found into MODEL_ALIASES. Never raises — returns
-    the effective alias map (static + discovered). Static map is the source
-    of truth when discovery yields nothing.
-    """
-    now = time.time()
-    if not force and MODEL_CACHE["models"] is not None \
-            and (now - MODEL_CACHE["ts"]) < MODEL_CACHE_TTL:
-        return MODEL_CACHE["models"]
-    effective = dict(MODEL_ALIASES)
-    try:
-        url = f"{URL_BASE}/api/organizations"
-        headers = {"User-Agent": UA, "Cookie": creds.cookie_header(),
-                   "Referer": "https://claude.ai/"}
-        resp = fetch_with_retries("GET", url, headers=headers, timeout=10,
-                                  max_retries=1)
-        if resp is not None and resp.status_code == 200:
-            try:
-                data = resp.json()
-            except Exception:
-                data = None
-            found = []
-            if isinstance(data, list):
-                for org in data:
-                    caps = (org.get("capabilities") or []) if isinstance(org, dict) else []
-                    for c in caps:
-                        if isinstance(c, str) and c.startswith("claude-"):
-                            found.append(c)
-            for m in found:
-                if m not in effective.values() and m not in effective:
-                    effective[m] = m
-    except Exception:
-        pass
-    MODEL_CACHE["models"] = effective
-    MODEL_CACHE["ts"] = now
-    return effective

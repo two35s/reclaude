@@ -4,7 +4,6 @@ Speaks just enough Chrome DevTools Protocol over a raw WebSocket to:
   - list open targets (/json/list)
   - read cookies (Storage.getCookies)
   - run JS in the page (Runtime.evaluate, awaited)
-  - read the page URL (Target.getTargetInfo)
 
 No third-party dependencies: socket + ssl + hashlib + json only.
 """
@@ -186,9 +185,9 @@ class CDPConnection:
 
 
 def extract_session(cdp_port):
-    """Pull (cookies, page_url) from the first claude.ai page target.
+    """Pull claude.ai cookies from the first claude.ai page target.
 
-    Returns (cookies_dict, page_url). Raises on failure.
+    Returns a {name: value} dict. Raises on failure.
     """
     targets = list_targets(cdp_port)
     page = None
@@ -209,8 +208,6 @@ def extract_session(cdp_port):
 
     conn = CDPConnection(page["webSocketDebuggerUrl"])
     try:
-        info = conn.call("Target.getTargetInfo").get("targetInfo", {})
-        page_url = info.get("url") or page.get("url", "")
         cookies = {}
         try:
             res = conn.call("Storage.getCookies")
@@ -224,7 +221,7 @@ def extract_session(cdp_port):
             for c in res.get("cookies", []):
                 if "claude.ai" in c.get("domain", ""):
                     cookies[c["name"]] = c["value"]
-        return cookies, page_url
+        return cookies
     finally:
         conn.close()
 
