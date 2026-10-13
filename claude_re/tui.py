@@ -51,6 +51,13 @@ def layout(h):
     return (h - 2 if compact else h - 4), compact
 
 
+def dialog_window(h, w, n_items, title, hint, items_w):
+    """Centered dialog geometry: (x, y, width, height, visible rows)."""
+    bw = min(w - 2, max(len(title) + 8, items_w + 6, len(hint) + 6))
+    bh = min(h - 2, n_items + 2)
+    return (w - bw) // 2, (h - bh) // 2, bw, bh, max(1, bh - 2)
+
+
 def wrap(text, width):
     """Word-wrap into lines no longer than `width`; long words hard-split."""
     width = max(1, width)
@@ -311,24 +318,28 @@ class App:
     def _dialog(self, scr, h, w):
         if self.dialog == "models":
             items = [f"{a:<12} {f}" for a, f in MODEL_ALIASES.items()]
-            title = "model (enter picks, esc closes)"
+            title, hint, selectable = "model", "enter pick · esc close", True
         else:
             items = ["/new new conversation", "/model [name] switch model",
                      "/models list models", "/help this list", "/quit exit",
                      "enter send · ↑↓ scroll · esc clear · ^c quit"]
-            title = "commands (any key closes)"
-        bw = min(w - 4, max(len(title) + 4, max(len(i) for i in items) + 4))
-        bh = min(h - 4, len(items) + 4)
-        x, y = (w - bw) // 2, (h - bh) // 2
+            title, hint, selectable = "commands", "any key closes", False
+        x, y, bw, bh, vis = dialog_window(
+            h, w, len(items), title, hint, max(len(i) for i in items))
         for r in range(bh):
-            scr.addstr(y + r, x, " " * (bw - 1), self.attr(""))
-        scr.addstr(y, x, f" {title} "[:bw], curses.A_BOLD)
-        vis = bh - 2
-        start = max(0, min(self.sel - vis + 1, len(items) - vis)) if self.dialog == "models" else 0
-        rows = items[start:start + vis]
-        for i, item in enumerate(rows):
-            a = curses.A_REVERSE if (self.dialog == "models" and start + i == self.sel) else 0
-            scr.addstr(y + 2 + i, x + 2, item[:bw - 4], a)
+            scr.addstr(y + r, x, " " * (bw - 1), self.attr("panel"))
+        top, bot = box_frame(bw, title, hint)
+        scr.addstr(y, x, top, self.attr("dim"))
+        scr.addstr(y + bh - 1, x, bot, self.attr("dim"))
+        for r in range(1, bh - 1):
+            scr.addstr(y + r, x, "│", self.attr("dim"))
+            scr.addstr(y + r, x + bw - 1, "│", self.attr("dim"))
+        start = max(0, min(self.sel - vis + 1, len(items) - vis)) if selectable else 0
+        for i, item in enumerate(items[start:start + vis]):
+            a = self.attr("panel")
+            if selectable and start + i == self.sel:
+                a |= curses.A_REVERSE
+            scr.addstr(y + 1 + i, x + 2, item[:bw - 4], a)
 
     # ── input ────────────────────────────────────────────────
     def key(self, ch):

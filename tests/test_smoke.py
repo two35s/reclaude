@@ -9,7 +9,7 @@ from claude_re import chrome_cookies
 from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
 from claude_re.payload import build_payload
 from claude_re.streaming import _sse_data, _split_lines
-from claude_re.tui import box_frame, layout, msg_lines, wrap
+from claude_re.tui import box_frame, dialog_window, layout, msg_lines, wrap
 
 
 class SseParserTest(unittest.TestCase):
@@ -105,6 +105,14 @@ class TuiTextTest(unittest.TestCase):
         self.assertEqual(layout(30), (26, False))
         self.assertEqual(layout(10), (6, False))
         self.assertEqual(layout(8), (6, True))
+
+    def test_dialog_window_geometry(self):
+        x, y, bw, bh, vis = dialog_window(30, 100, 9, "model",
+                                          "enter pick · esc close", 30)
+        self.assertEqual((bw, bh, vis), (36, 11, 9))
+        self.assertEqual((x, y), ((100 - 36) // 2, (30 - 13) // 2))
+        x2, _, bw2, bh2, vis2 = dialog_window(8, 30, 9, "model", "hint", 30)
+        self.assertEqual((bw2, bh2, vis2), (28, 6, 4))
 
 
 class TuiCommandTest(unittest.TestCase):
