@@ -2,12 +2,14 @@
 
 Run from the repo root:  .venv/bin/python -m unittest discover -s tests -v
 """
+import argparse
 import unittest
 from unittest import mock
 
 from claude_re import chrome_cookies
 from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
 from claude_re.payload import build_payload
+from claude_re.stats import stats_argv
 from claude_re.streaming import _sse_data, _split_lines
 from claude_re.tui import App, Chat, Msg, block_word, render_messages, wrap
 
@@ -113,6 +115,24 @@ class TuiLayoutTest(unittest.TestCase):
         self.assertEqual(x, (130 - 76) // 2)
         x2, cw2 = app.col(50)
         self.assertEqual((x2, cw2), (0, 50))
+
+
+class StatsArgvTest(unittest.TestCase):
+    """--stats must forward to opencode's dashboard CLI, pinned to this project."""
+
+    def test_argv_pins_project_and_forwards_flags(self):
+        args = argparse.Namespace(days=7, year=None, all=False, models=True,
+                                  tools=False, cost=False, full=False,
+                                  limit=None, json=True)
+        self.assertEqual(stats_argv(args),
+                         ["stats", "--project", ".", "--days", "7",
+                          "--models", "--json"])
+
+    def test_argv_defaults_to_plain_project_dashboard(self):
+        args = argparse.Namespace(days=None, year=None, all=False, models=False,
+                                  tools=False, cost=False, full=False,
+                                  limit=None, json=False)
+        self.assertEqual(stats_argv(args), ["stats", "--project", "."])
 
 
 if __name__ == "__main__":

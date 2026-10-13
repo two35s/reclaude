@@ -14,8 +14,31 @@ A terminal client for Claude.ai. It replays your own browser session against Cla
 - **Multi-turn memory** — one server-side conversation per terminal session.
 - **Stealth cleanup** — optionally deletes that conversation on exit so it never shows in your browser sidebar.
 - **Three ways to authenticate** — import an existing Chrome login, launch a capture browser, or paste cookies by hand.
+- **OpenAI-compatible proxy** (`--proxy`) — expose your backend as a local `http://localhost:8765/v1` endpoint so [Crush](https://github.com/charmbracelet/crush) or any OpenAI-compatible client can use it.
 
 ---
+
+## Crush Integration (OpenCode Successor)
+
+Run reclaude as an OpenAI-compatible backend for **[Crush](https://github.com/charmbracelet/crush)** — the active terminal TUI descended from OpenCode:
+
+```bash
+# Terminal 1 — start the proxy
+python -m claude_re --proxy          # listens on http://localhost:8765
+
+# Terminal 2 — launch Crush
+crush                                # models named "Claude * (reclaude)" appear in ctrl+l picker
+```
+
+`~/.config/crush/crushrc` is already configured by the integration setup. If you need to edit it:
+
+```bash
+# ~/.config/crush/crushrc
+provider add reclaude --type openai --base-url "http://localhost:8765/v1"
+model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000
+model add reclaude/haiku --name "Claude Haiku (reclaude)" --context-window 200000
+```
+
 
 ## Requirements
 
@@ -104,6 +127,10 @@ python -m claude_re --model haiku                    # choose a model
 python -m claude_re --no-stealth                     # keep chats in browser history
 python -m claude_re --batch prompts.txt              # one prompt per line → batch_results.json
 python -m claude_re --clear-session                  # wipe stored credentials
+python -m claude_re --proxy                          # OpenAI-compatible proxy on :8765 (for Crush)
+python -m claude_re --proxy --port 9000              # proxy on a custom port
+python -m claude_re --stats                          # opencode usage dashboard for this project
+python -m claude_re --stats --models --tools         # dashboard with model/tool breakdowns
 ```
 
 ### Flags
@@ -115,6 +142,9 @@ python -m claude_re --clear-session                  # wipe stored credentials
 | `--login` | Open Chrome to log in and save the profile, without extracting. |
 | `--manual` | Enter `org_id` / `Cookie` header by hand. |
 | `--tui` | Full-screen chat interface (opencode-style), instead of the line REPL. |
+| `--stats` | Usage dashboard for this project — delegates to opencode's own `stats` CLI (`opencode stats --project .`). Accepts `--days N`, `--year Y`, `--all`, `--models`, `--tools`, `--cost`, `--full`, `--limit N`, `--json`. |
+| `--proxy` | Start an OpenAI-compatible HTTP proxy on `localhost:8765` for Crush/opencode integration. |
+| `--port PORT` | Port for `--proxy` mode (default: `8765`). |
 | `--prompt TEXT` | Send a single prompt, then exit. |
 | `--model NAME` | Model alias or full id (default: `sonnet`). |
 | `--batch FILE` | Send one prompt per line; writes `batch_results.json`. |
@@ -210,6 +240,7 @@ reclaude/
 │   ├── http.py            # session reuse, retries, request backend
 │   ├── streaming.py       # SSE parsing, rate-limit handling
 │   ├── tui.py             # full-screen opencode-style chat (--tui)
+│   ├── stats.py           # usage dashboard: delegates to `opencode stats --project .`
 │   └── repl.py            # help + model listing
 └── requirements.txt
 ```
