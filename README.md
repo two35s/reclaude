@@ -1,25 +1,26 @@
 # reclaude
 
-Terminal client for Claude.ai — no API key. Replays your own browser session against Claude's internal REST + SSE endpoint and streams replies word-by-word.
+A terminal client for Claude.ai. It replays your own browser session against Claude's internal REST + SSE endpoint and streams replies token-by-token — no API key.
 
-> **Research tool.** Everything runs under your Claude.ai account: its limits, tiers, and billing still apply. This does not bypass rate limits or paywalls — it only replaces the browser UI with a terminal.
+> **Research tool.** Everything runs under your Claude.ai account, so its limits, tiers, and billing still apply. It replaces the browser UI with a terminal; it does not bypass rate limits or paywalls.
 
 ---
 
-## How it works
+## Features
 
-```
-┌──────────┐     ┌───────────────┐     ┌──────────────┐
-│ Terminal  │────▶│  curl_cffi    │────▶│ claude.ai    │
-│ (You>)   │     │  TLS + SSE    │     │ REST + SSE   │
-│          │◀────│  stream       │◀────│              │
-└──────────┘     └───────────────┘     └──────────────┘
-```
+- **No API key** — reuses your existing Claude.ai session.
+- **Live streaming** — SSE `content_block_delta` events print as they arrive.
+- **Multi-turn memory** — one server-side conversation per terminal session.
+- **Stealth cleanup** — optionally deletes that conversation on exit so it never shows in your browser sidebar.
+- **Three ways to authenticate** — import an existing Chrome login, launch a capture browser, or paste cookies by hand.
+- **Model discovery** — merges server-advertised models with the built-in list.
 
-1. **Capture** — real Chrome launches, you log in and send one chat message, credentials (`sessionKey`, `org_id`, cookies) are extracted over local CDP and saved.
-2. **Replay** — prompts go to `/api/organizations/{org_id}/chat_conversations/{conv_id}/completion` with your cookies, using a Chrome TLS fingerprint matched to the declared user agent.
-3. **Stream** — `content_block_delta` SSE events print live in the terminal.
-4. **Memory** — one server-side conversation per session gives multi-turn context; optional cleanup deletes it on exit.
+---
+
+## Requirements
+
+- Python 3.9+
+- Google Chrome — only for the credential-capture methods (`--from-chrome`, `--auto-fetch`, `--login`)
 
 ---
 
@@ -27,71 +28,123 @@ Terminal client for Claude.ai — no API key. Replays your own browser session a
 
 ```bash
 git clone <your-reclaude-url> && cd reclaude
+
 python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Requires Python 3.9+ and Google Chrome (only for the one-time credential capture).
+The examples below assume the virtualenv is active. If you skip activation, call the interpreter directly, e.g. `.venv/bin/python -m claude_re`. On macOS/Linux there is usually no bare `python`; prefer the venv over the system `python3`.
 
-> The commands below assume the venv is active. If you skip activation, prefix
-> them with `.venv/bin/` (e.g. `.venv/bin/python -m claude_re`). On macOS/Linux
-> there is often no bare `python` — use the venv, not the system `python3`.
+---
+
+## Quick start
+
+```bash
+# 1. Import the session from the Chrome you're already logged into
+python -m claude_re --from-chrome
+
+# 2. Chat
+python -m claude_re
+```
+
+That's it. The first command writes `~/.config/claude_re/claude_session.json`; afterwards the plain command starts the interactive REPL.
+
+---
+
+## Getting credentials
+
+Choose one method. All of them save the same credential file.
+
+| Method | How it works | Platform |
+|---|---|---|
+| `--from-chrome` | Reads and decrypts cookies from a browser you're already logged into. **Recommended** — no second login. | macOS, Linux |
+| `--auto-fetch` | Launches a dedicated Chrome profile, then extracts the session over local CDP. | macOS, Linux, Windows |
+| `--manual` | You paste `org_id`, `conv_id`, and the `Cookie` header from DevTools. | Any |
+
+### `--from-chrome`
+
+```bash
+python -m claude_re --from-chrome
+```
+
+Auto-discovers Chrome, Chromium, Brave, and Edge profiles. To target a specific one:
+
+```bash
+python -m claude_re --from-chrome "~/Library/Application Support/Google/Chrome/Default"
+```
+
+macOS will ask for the browser's `... Safe Storage` key from the Keychain — click **Always Allow** to avoid repeat prompts. Decryption uses the system `openssl` binary. On Windows, cookie values are DPAPI-protected; use `--auto-fetch` there instead.
+
+### `--auto-fetch`
+
+```bash
+python -m claude_re --auto-fetch
+```
+
+A real Chrome window opens. Log in, open a chat, send one message, then return to the terminal and press ENTER. Paste the chat URL when asked and the session is extracted automatically.
+
+### `--manual`
+
+```bash
+python -m claude_re --manual
+```
+
+Follow the on-screen prompts: open a `completion` request in DevTools → Network, copy its `Cookie` header, and provide the `org_id` / `conv_id` from its URL.
 
 ---
 
 ## Usage
 
-### 1. Get credentials (one-time)
-
 ```bash
-# Recommended: auto-extract via real Chrome + CDP
-python -m claude_re --auto-fetch
-# 1. Chrome opens → log in, open a chat, send a message
-# 2. Press ENTER in the terminal, paste the chat URL when asked
-
-# Alternative: paste values from DevTools → Network → 'completion' request
-python -m claude_re --manual
-
-# Simplest: reuse a browser you're already logged into (no second login)
-python -m claude_re --from-chrome
-# auto-discovers Chrome/Chromium/Brave/Edge on macOS/Linux; pass a path to
-# pick a specific profile:
-python -m claude_re --from-chrome "~/Library/Application Support/Google/Chrome/Default"
+python -m claude_re                                  # interactive REPL
+python -m claude_re --prompt "explain SSE"           # single prompt
+python -m claude_re --model haiku                    # choose a model
+python -m claude_re --no-stealth                     # keep chats in browser history
+python -m claude_re --batch prompts.txt              # one prompt per line → batch_results.json
+python -m claude_re --models-refresh                 # refresh the model list first
+python -m claude_re --clear-session                  # wipe stored credentials
 ```
 
-### 2. Chat
+### Flags
 
-```bash
-python -m claude_re                          # interactive REPL
-python -m claude_re --prompt "explain SSE"   # single prompt
-python -m claude_re --model haiku            # pick model upfront
-python -m claude_re --no-stealth             # keep chats in browser history
-python -m claude_re --models-refresh         # refresh model list first
-python -m claude_re --batch prompts.txt      # one prompt per line → batch_results.json
-python -m claude_re --clear-session          # wipe stored credentials
-```
+| Flag | Description |
+|---|---|
+| `--from-chrome [PROFILE]` | Import a session from an existing browser profile (auto-discovers; pass a path to narrow it). |
+| `--auto-fetch` | Launch Chrome and extract the session over CDP. |
+| `--login` | Open Chrome to log in and save the profile, without extracting. |
+| `--manual` | Enter `org_id` / `conv_id` / `Cookie` header by hand. |
+| `--prompt TEXT` | Send a single prompt, then exit. |
+| `--model NAME` | Model alias or full id (default: `sonnet`). |
+| `--batch FILE` | Send one prompt per line; writes `batch_results.json`. |
+| `--jailbreak FILE` | Send the contents of a file as the prompt. |
+| `--no-stealth` | Keep the server-side conversation after exit. |
+| `--models-refresh` | Refresh the model list from the server before running. |
+| `--org-id` / `--conv-id` / `--cookie` | Supply credentials inline instead of a saved file. |
+| `--clear-session` | Delete the stored credential file. |
 
 ### REPL commands
 
 | Command | Effect |
 |---|---|
-| `/model <name>` | Switch model (new conversation) |
-| `/models` | List models (cached server discovery + static) |
-| `/models refresh` | Force-refresh model list from server |
-| `/stealth on\|off` | Toggle conversation cleanup on exit |
-| `/new` | Start a fresh conversation |
-| `/cleanup` | Delete the session conversation now |
-| `/clear-session` | Wipe stored credentials |
-| `/help` | Show commands |
-| `exit` | Quit (auto-cleans if stealth is on) |
+| `/model <name>` | Switch model (starts a new conversation). |
+| `/models` | List models (cached discovery + built-ins). |
+| `/models refresh` | Force a refresh from the server. |
+| `/stealth on\|off` | Toggle conversation cleanup on exit. |
+| `/new` | Start a fresh conversation. |
+| `/cleanup` | Delete the session conversation now. |
+| `/clear-session` | Wipe stored credentials. |
+| `/help` | Show commands. |
+| `exit` | Quit (auto-cleans when stealth is on). |
 
-### Models
+---
+
+## Models
 
 | Shortcut | Full name | Tier |
 |---|---|---|
-| `haiku` | `claude-haiku-5-5` (default cheap) | free |
-| `sonnet` | `claude-sonnet-5-5` (default) | free |
+| `haiku` | `claude-haiku-5-5` | free |
+| `sonnet` | `claude-sonnet-5-5` | free — default |
 | `sonnet-5` | `claude-sonnet-5` | free |
 | `haiku-4-5` | `claude-haiku-4-5` | free |
 | `sonnet-4-6` | `claude-sonnet-4-6` | free |
@@ -107,7 +160,24 @@ python -m claude_re --clear-session          # wipe stored credentials
 | `fable` | `claude-fable-5` | pro/specialized |
 | `mythos` | `claude-mythos-5` | pro/specialized |
 
-Unknown names pass through as-is. On 429 the client falls back to Haiku once, then waits per `Retry-After` (with jitter, bounded retries).
+Unknown names pass through unchanged. On HTTP 429 the client falls back to Haiku once, then waits per `Retry-After` (with jitter, bounded retries).
+
+---
+
+## How it works
+
+```
+┌──────────┐     ┌───────────────┐     ┌──────────────┐
+│ Terminal │────▶│  curl_cffi    │────▶│  claude.ai   │
+│  You>    │     │  TLS + SSE    │     │ REST + SSE   │
+│          │◀────│  stream       │◀────│              │
+└──────────┘     └───────────────┘     └──────────────┘
+```
+
+1. **Capture** — credentials (`sessionKey`, `org_id`, cookies) are read from a browser session and saved.
+2. **Replay** — prompts post to `/api/organizations/{org_id}/chat_conversations/{conv_id}/completion` with your cookies, using a Chrome TLS fingerprint matched to the declared user agent.
+3. **Stream** — `content_block_delta` SSE events print live in the terminal.
+4. **Memory** — one server-side conversation per session provides multi-turn context; stealth cleanup deletes it on exit.
 
 ---
 
@@ -116,33 +186,46 @@ Unknown names pass through as-is. On 429 the client falls back to Haiku once, th
 ```
 reclaude/
 ├── claude_re/
-│   ├── __main__.py   # python -m claude_re
-│   ├── cli.py        # flags, modes, REPL loop
-│   ├── compat.py     # curl_cffi / requests backends
-│   ├── config.py     # paths, UA, models, payload template
-│   ├── timezone.py   # IANA timezone detection
-│   ├── creds.py      # CredentialManager
-│   ├── cdp.py        # stdlib-only CDP client (no playwright needed)
-│   ├── chrome.py     # real-Chrome launch / login
-│   ├── chrome_cookies.py # read/decrypt session from an existing Chrome profile
-│   ├── payload.py    # per-request payload builder
-│   ├── http.py       # session reuse, retries, model discovery
-│   ├── streaming.py  # SSE parsing, rate-limit handling
-│   └── repl.py       # help + model listing
+│   ├── __main__.py        # python -m claude_re
+│   ├── cli.py             # flags, modes, REPL loop
+│   ├── compat.py          # curl_cffi / requests backends
+│   ├── config.py          # paths, UA, models, payload template
+│   ├── timezone.py        # IANA timezone detection
+│   ├── creds.py           # CredentialManager
+│   ├── cdp.py             # stdlib-only CDP client (no playwright)
+│   ├── chrome.py          # launch / login helpers
+│   ├── chrome_cookies.py  # read + decrypt an existing browser profile
+│   ├── payload.py         # per-request payload builder
+│   ├── http.py            # session reuse, retries, model discovery
+│   ├── streaming.py       # SSE parsing, rate-limit handling
+│   └── repl.py            # help + model listing
 └── requirements.txt
 ```
 
-Protocol details live where they belong: fingerprint + session reuse in `http.py`, streaming and backoff in `streaming.py`.
+Fingerprint and session reuse live in `http.py`; streaming and backoff live in `streaming.py`.
 
 ---
 
-## Security warnings
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `python: command not found` | Activate the venv or use `.venv/bin/python`. |
+| `unrecognized arguments` | The `# ...` notes in docs are comments, not arguments. |
+| Keychain prompt on `--from-chrome` | Click **Always Allow**; retry the command. |
+| `Session invalid or expired` | Re-import with `--from-chrome` or `--auto-fetch`. |
+| `429` / rate limited | Wait, or switch with `/model haiku`. |
+| Cloudflare block | Re-run `--auto-fetch` to refresh cookies. |
+
+---
+
+## Security
 
 - **Your `sessionKey` is a password.** Anyone holding the credential file (`~/.config/claude_re/claude_session.json`, `%APPDATA%\claude_re\` on Windows) has full access to your Claude.ai account. Never share, upload, or commit it.
-- Credentials are stored as **plaintext JSON** (owner-only `600` on Unix). Run `--clear-session` when done, and log out in the browser to invalidate the session if exposed.
-- The Chrome profile (`claude_profile/`) also holds a logged-in session — same handling applies.
-- `--from-chrome` reads your normal browser profile's cookie DB and asks the OS for the browser's storage key (macOS Keychain; Linux `peanuts`). Click **Always Allow** to avoid repeat prompts; AES decryption shells out to the system `openssl`.
-- The terminal prints the first ~25 chars of the session key during `--auto-fetch`; avoid screen-sharing that step.
+- Credentials are stored as **plaintext JSON** with owner-only permissions (`600` on Unix). Run `--clear-session` when done, and log out in the browser to invalidate the session if it is exposed.
+- The capture Chrome profile (`claude_profile/`) also holds a logged-in session — handle it the same way.
+- `--from-chrome` reads your normal browser profile's cookie database and requests the browser's storage key from the OS (macOS Keychain; Linux `peanuts`). AES decryption shells out to the system `openssl`.
+- The terminal prints the first ~25 characters of the session key during capture; avoid screen-sharing that step.
 
 ---
 
