@@ -142,6 +142,23 @@ class TuiCommandTest(unittest.TestCase):
         self.assertFalse(app._command("/help"))
         self.assertEqual(app.dialog, "help")
 
+    def test_slash_completion_filters_and_tab_picks(self):
+        from claude_re.tui import App
+        app = App(None, "claude-sonnet-5-5", stealth=False)
+        app.buf = "/m"
+        self.assertEqual([c for c, _ in app.cmd_items()], ["/model", "/models"])
+        app.buf = "/x"
+        self.assertEqual(app.cmd_items(), [])
+        app.buf = "/model haiku"
+        self.assertEqual(app.cmd_items(), [])
+        app.buf = "hi"
+        self.assertEqual(app.cmd_items(), [])
+        app.buf = "/"
+        app.cmd_items()  # settle: selection resets on input change
+        app.cmd_sel = 3
+        app.key(9)
+        self.assertEqual(app.buf, "/help ")
+
 
 if __name__ == "__main__":
     unittest.main()

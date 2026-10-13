@@ -20,6 +20,14 @@ from .streaming import stream_prompt
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+COMMANDS = [
+    ("/new", "new conversation"),
+    ("/model", "switch model"),
+    ("/models", "list models"),
+    ("/help", "this list"),
+    ("/quit", "exit"),
+]
+
 
 def trunc(s, n):
     s = str(s)
@@ -105,6 +113,8 @@ class App:
         self.queue = queue.Queue()
         self.busy = False
         self.spin = 0
+        self.cmd_sel = 0
+        self._cmd_buf = None
 
     # ── sending ──────────────────────────────────────────────
     def send(self):
@@ -119,6 +129,16 @@ class App:
         self.busy = True
         threading.Thread(target=self._worker, args=(live, text),
                          daemon=True).start()
+
+    def cmd_items(self):
+        """Slash completions for the current input; resets selection on change."""
+        if (not self.buf.startswith("/") or " " in self.buf
+                or self.dialog or self.busy):
+            return []
+        if self.buf != self._cmd_buf:
+            self._cmd_buf, self.cmd_sel = self.buf, 0
+        frag = self.buf[1:].lower()
+        return [(c, d) for c, d in COMMANDS if c[1:].startswith(frag)]
 
     def _command(self, text):
         """Slash commands (no network). Returns True to quit."""
@@ -238,6 +258,9 @@ class App:
         try:
             self._header(scr, w)
             self._messages(scr, h, w)
+            popup = self.cmd_items()
+            if popup:
+                self._cmd_popup(scr, h, w, popup)
             self._input(scr, h, w)
             self._footer(scr, h, w)
             if self.dialog:
@@ -306,13 +329,32 @@ class App:
         except curses.error:
             pass
 
+    def _cmd_popup(self, scr, h, w, items):
+        bw = min(w - 2, max(len(c) + len(d) + 5 for c, d in items) + 2)
+        bh = len(items) + 2
+        _, compact = layout(h)
+        y = max(1, ((h - 2) if compact else (h - 4)) - bh)
+        for r in range(bh):
+            scr.addstr(y + r, 0, " " * (bw - 1), self.attr("panel"))
+        top, bot = box_frame(bw, "commands", "tab pick · enter run")
+        scr.addstr(y, 0, top, self.attr("dim"))
+        scr.addstr(y + bh - 1, 0, bot, self.attr("dim"))
+        for r in range(1, bh - 1):
+            scr.addstr(y + r, 0, "│", self.attr("dim"))
+            scr.addstr(y + r, bw - 1, "│", self.attr("dim"))
+        for i, (c, d) in enumerate(items):
+            a = self.attr("panel")
+            if i == self.cmd_sel % len(items):
+                a |= curses.A_REVERSE
+            scr.addstr(y + 1 + i, 2, f"{c:<9} {d}"[:bw - 4], a)
+
     def _footer(self, scr, h, w):
         if self.busy:
             left = f" {SPINNER[self.spin % len(SPINNER)]} working…  esc clears input"
         elif w < 56:
             left = " /new /model /help /quit"
         else:
-            left = " /new /model /models /help /quit · enter to send"
+            left = " /new /model /models /help /quit · tab pick · enter send"
         scr.addstr(h - 1, 0, left[:w], self.attr("dim"))
 
     def _dialog(self, scr, h, w):
@@ -361,9 +403,17 @@ class App:
             if not self.busy:
                 self.dialog, self.sel = "models", 0
         elif ch == curses.KEY_UP:
-            self.off += 1
+            items = self.cmd_items()
+            if items:
+                self.cmd_sel = (self.cmd_sel - 1) % len(items)
+            else:
+                self.off += 1
         elif ch == curses.KEY_DOWN:
-            self.off = max(0, self.off - 1)
+            items = self.cmd_items()
+            if items:
+                self.cmd_sel = (self.cmd_sel + 1) % len(items)
+            else:
+                self.off = max(0, self.off - 1)
         elif ch == curses.KEY_PPAGE:
             self.off += 10
         elif ch == curses.KEY_NPAGE:
@@ -384,6 +434,11 @@ class App:
             self.buf = self.buf[:self.cur] + self.buf[self.cur + 1:]
         elif ch == 27:
             self.buf, self.cur = "", 0
+        elif ch == 9:
+            items = self.cmd_items()
+            if items:
+                self.buf = items[self.cmd_sel % len(items)][0] + " "
+                self.cur = len(self.buf)
         elif 32 <= ch < 0x110000:
             self.buf = self.buf[:self.cur] + chr(ch) + self.buf[self.cur:]
             self.cur += 1
