@@ -35,8 +35,6 @@ def main():
     ap.add_argument("--batch",         type=str, help="Send multiple prompts from file")
     ap.add_argument("--no-stealth",    action="store_true", help="Disable stealth mode")
     ap.add_argument("--clear-session", action="store_true", help="Delete stored credentials")
-    ap.add_argument("--tui",           action="store_true",
-                    help="Full-screen opencode-style chat interface")
     ap.add_argument("--proxy",         action="store_true",
                     help="Start an OpenAI-compatible proxy (for Crush/opencode integration)")
     ap.add_argument("--port",          type=int, default=8765,
@@ -82,12 +80,6 @@ def main():
     # ── State ────────────────────────────────────────────
     model = resolve_model(args.model)
     stealth = not args.no_stealth
-
-    # Full-screen chat interface (opencode-style).
-    if args.tui:
-        from .tui import run_tui
-        run_tui(creds, model, stealth)
-        return
 
     # OpenAI-compatible proxy mode (for Crush / archived opencode integration).
     if args.proxy:

@@ -8,7 +8,7 @@ A terminal client for Claude.ai. It replays your own browser session against Cla
 
 ## Features
 
-- **Two interfaces** — a line REPL, or `--tui` for a full-screen, opencode-style chat.
+- **Line REPL** — an interactive terminal chat with live streaming.
 - **No API key** — reuses your existing Claude.ai session.
 - **Live streaming** — SSE `content_block_delta` events print as they arrive.
 - **Multi-turn memory** — one server-side conversation per terminal session.
@@ -121,7 +121,6 @@ Follow the on-screen prompts: open a `completion` request in DevTools → Networ
 
 ```bash
 python -m claude_re                                  # interactive REPL
-python -m claude_re --tui                            # full-screen opencode-style chat
 python -m claude_re --prompt "explain SSE"           # single prompt
 python -m claude_re --model haiku                    # choose a model
 python -m claude_re --no-stealth                     # keep chats in browser history
@@ -139,7 +138,6 @@ python -m claude_re --proxy --port 9000              # proxy on a custom port
 | `--auto-fetch` | Launch Chrome and extract the session over CDP. |
 | `--login` | Open Chrome to log in and save the profile, without extracting. |
 | `--manual` | Enter `org_id` / `Cookie` header by hand. |
-| `--tui` | Full-screen chat interface (opencode-style), instead of the line REPL. |
 | `--proxy` | Start an OpenAI-compatible HTTP proxy on `localhost:8765` for Crush/opencode integration. |
 | `--port PORT` | Port for `--proxy` mode (default: `8765`). |
 | `--prompt TEXT` | Send a single prompt, then exit. |
@@ -149,22 +147,6 @@ python -m claude_re --proxy --port 9000              # proxy on a custom port
 | `--no-stealth` | Keep the server-side conversation after exit. |
 | `--org-id` / `--cookie` | Supply credentials inline instead of a saved file. |
 | `--clear-session` | Delete the stored credential file. |
-
-### TUI keys
-
-With `--tui`, a full-screen chat (like opencode's chat page):
-
-| Key | Action |
-|---|---|
-| `enter` / `ctrl+s` | Send the message. |
-| `ctrl+n` | New chat. |
-| `ctrl+o` | Switch model (opens a picker; starts a new conversation). |
-| `ctrl+a` | Switch chat / new chat. |
-| `↑` `↓` `pgup` `pgdn` | Scroll the message stream. |
-| `←` `→` `home` `end` | Move the input cursor. |
-| `?` (empty input) / `F1` | Show keybinds. |
-| `esc` | Clear input / close a dialog. |
-| `ctrl+c` / `ctrl+d` | Quit (deletes conversations when stealth is on). |
 
 ### REPL commands
 
@@ -236,7 +218,6 @@ reclaude/
 │   ├── payload.py         # per-request payload builder
 │   ├── http.py            # session reuse, retries, request backend
 │   ├── streaming.py       # SSE parsing, rate-limit handling
-│   ├── tui.py             # full-screen opencode-style chat (--tui)
 │   └── repl.py            # help + model listing
 └── requirements.txt
 ```
