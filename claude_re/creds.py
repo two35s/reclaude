@@ -4,6 +4,7 @@ import os
 
 from . import chrome as chrome_mod
 from .config import CRED_FILE, UA, URL_BASE
+from .http import DEFAULT_TIMEOUT
 
 
 class CredentialManager:
@@ -187,7 +188,7 @@ class CredentialManager:
                        "Referer": "https://claude.ai/"}
             resp = http_mod.fetch_with_retries(
                 "GET", f"{URL_BASE}/api/organizations", headers=headers,
-                timeout=10, max_retries=1)
+                timeout=DEFAULT_TIMEOUT, max_retries=1)
             if resp is not None and resp.status_code == 200:
                 data = resp.json()
                 if isinstance(data, list) and data:

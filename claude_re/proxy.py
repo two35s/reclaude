@@ -138,7 +138,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     # Injected by the server factory
     creds = None
-    session_registry = {}  # conversation_id → session_state dict
+    session_registry: dict[str, dict] = {}  # conversation_id → session_state dict
     registry_lock = threading.Lock()
 
     # ── routing ──────────────────────────────────────────────────────
@@ -314,13 +314,13 @@ def run_proxy(creds, port=8765):
     server = HTTPServer(("127.0.0.1", port), _Handler)
 
     print(f"\n[proxy] reclaude OpenAI-compatible proxy listening on http://localhost:{port}")
-    print(f"\n  Register in Crush (~/.config/crush/crushrc):")
+    print("\n  Register in Crush (~/.config/crush/crushrc):")
     print(f'    provider add reclaude --type openai --base-url "http://localhost:{port}/v1"')
-    print(f'    model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000')
-    print(f'    model add reclaude/haiku --name "Claude Haiku (reclaude)" --context-window 200000')
-    print(f"\n  Or for archived opencode binary:")
+    print('    model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000')
+    print('    model add reclaude/haiku --name "Claude Haiku (reclaude)" --context-window 200000')
+    print("\n  Or for archived opencode binary:")
     print(f"    LOCAL_ENDPOINT=http://localhost:{port} opencode")
-    print(f"\n  Press Ctrl+C to stop.\n")
+    print("\n  Press Ctrl+C to stop.\n")
 
     try:
         server.serve_forever()

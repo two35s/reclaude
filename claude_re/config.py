@@ -40,6 +40,14 @@ MODEL_ALIASES = {
     "haiku-snap":   "claude-haiku-4-5-20251001",
 }
 
+# Cryptographic constants
+PBKDF2_ITERATIONS_MAC = 1003
+PBKDF2_ITERATIONS_LINUX = 1
+AES_BLOCK_SIZE = 16
+AES_KEY_SIZE = 16
+AES_IV_SIZE = 16
+CHROME_COOKIE_SCHEMA_VERSION_V24 = 24
+
 
 def resolve_model(name):
     """Resolve shorthand or full model name."""

@@ -22,21 +22,25 @@ import subprocess
 import sys
 import tempfile
 
+from .config import (AES_BLOCK_SIZE, AES_IV_SIZE,
+                     CHROME_COOKIE_SCHEMA_VERSION_V24,
+                     PBKDF2_ITERATIONS_LINUX, PBKDF2_ITERATIONS_MAC)
+
 # Browser family → (profile root, Keychain service, Keychain account, PBKDF2 iters)
 _MAC_BROWSERS = {
     "Chrome":   ("~/Library/Application Support/Google/Chrome",
-                 "Chrome Safe Storage", "Chrome", 1003),
+                 "Chrome Safe Storage", "Chrome", PBKDF2_ITERATIONS_MAC),
     "Chromium": ("~/Library/Application Support/Chromium",
-                 "Chromium Safe Storage", "Chromium", 1003),
+                 "Chromium Safe Storage", "Chromium", PBKDF2_ITERATIONS_MAC),
     "Brave":    ("~/Library/Application Support/BraveSoftware/Brave-Browser",
-                 "Brave Safe Storage", "Brave", 1003),
+                 "Brave Safe Storage", "Brave", PBKDF2_ITERATIONS_MAC),
     "Edge":     ("~/Library/Application Support/Microsoft Edge",
-                 "Microsoft Edge Safe Storage", "Microsoft Edge", 1003),
+                 "Microsoft Edge Safe Storage", "Microsoft Edge", PBKDF2_ITERATIONS_MAC),
 }
 _LINUX_BROWSERS = {
-    "Chrome":   ("~/.config/google-chrome", None, None, 1),
-    "Chromium": ("~/.config/chromium", None, None, 1),
-    "Brave":    ("~/.config/BraveSoftware/Brave-Browser", None, None, 1),
+    "Chrome":   ("~/.config/google-chrome", None, None, PBKDF2_ITERATIONS_LINUX),
+    "Chromium": ("~/.config/chromium", None, None, PBKDF2_ITERATIONS_LINUX),
+    "Brave":    ("~/.config/BraveSoftware/Brave-Browser", None, None, PBKDF2_ITERATIONS_LINUX),
 }
 
 
@@ -125,7 +129,7 @@ def _password(info):
     return b"peanuts"  # Linux v10
 
 
-def _aes_decrypt(ciphertext, key, iv=b" " * 16):
+def _aes_decrypt(ciphertext, key, iv=b" " * AES_IV_SIZE):
     try:
         p = subprocess.run(
             ["openssl", "enc", "-aes-128-cbc", "-d", "-nopad",
@@ -152,7 +156,7 @@ def _decrypt(enc, key, strip_prefix=False):
         return enc.decode("utf-8", "replace")  # legacy plaintext entry
     pt = _aes_decrypt(enc[3:], key)
     pad = pt[-1]
-    if 1 <= pad <= 16:  # strip PKCS7 padding
+    if 1 <= pad <= AES_BLOCK_SIZE:  # strip PKCS7 padding
         pt = pt[:-pad]
     if strip_prefix and len(pt) > 32:
         pt = pt[32:]
@@ -212,7 +216,7 @@ def read_claude_cookies(explicit=None):
             errors.append(f"{info['dir']}: {e}")
             continue
 
-        strip_prefix = version >= 24
+        strip_prefix = version >= CHROME_COOKIE_SCHEMA_VERSION_V24
         cookies = {}
         for name, _host, enc, val in rows:
             try:

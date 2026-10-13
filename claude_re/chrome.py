@@ -7,6 +7,10 @@ import time
 
 from .config import PROFILE
 
+# Chrome CDP constants
+CDP_TIMEOUT = 30
+CDP_POLL_INTERVAL = 0.5
+
 
 def find_chrome():
     """Find Chrome executable (Windows, macOS, Linux)."""
@@ -45,7 +49,7 @@ def get_free_port():
         return s.getsockname()[1]
 
 
-def _wait_for_cdp(cdp_port, timeout=30):
+def _wait_for_cdp(cdp_port, timeout=CDP_TIMEOUT):
     """Poll /json/version until DevTools answers or timeout."""
     import urllib.request
     deadline = time.time() + timeout
@@ -56,7 +60,7 @@ def _wait_for_cdp(cdp_port, timeout=30):
                 if r.status == 200:
                     return True
         except Exception:
-            time.sleep(0.5)
+            time.sleep(CDP_POLL_INTERVAL)
     return False
 
 

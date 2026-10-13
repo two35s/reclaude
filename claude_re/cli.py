@@ -12,6 +12,8 @@ from .creds import CredentialManager
 from .repl import print_help, print_models
 from .streaming import stream_prompt
 
+DEFAULT_BATCH_DELAY = 2
+
 
 def main():
     print()
@@ -145,7 +147,7 @@ def main():
                 r = stream_prompt(creds, p, model, stealth, session)
                 results.append({"prompt": p, "response": r or ""})
                 if i < len(prompts) - 1:
-                    time.sleep(2)
+                    time.sleep(DEFAULT_BATCH_DELAY)
         finally:
             out = os.path.join(DIR, "batch_results.json")
             with open(out, "w", encoding="utf-8") as f:
