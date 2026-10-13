@@ -9,6 +9,7 @@ from claude_re import chrome_cookies
 from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
 from claude_re.payload import build_payload
 from claude_re.streaming import _sse_data, _split_lines
+from claude_re.tui import msg_lines, wrap
 
 
 class SseParserTest(unittest.TestCase):
@@ -68,6 +69,22 @@ class CookieDecryptTest(unittest.TestCase):
             value = chrome_cookies._decrypt(b"v10\x00", b"k" * 16,
                                             strip_prefix=False)
         self.assertEqual(value, "session")
+
+
+class TuiTextTest(unittest.TestCase):
+    """Message rendering stays within width and marks roles/streaming."""
+
+    def test_wrap_never_exceeds_width(self):
+        for width in (1, 5, 20):
+            for line in wrap("the quick brown fox\nsupercalifragilisticexpialidocious", width):
+                self.assertLessEqual(len(line), width)
+
+    def test_msg_lines_mark_roles_and_streaming(self):
+        self.assertEqual(msg_lines("user", "hi", 40), [("> hi", "user")])
+        self.assertEqual(msg_lines("assistant", "hello", 40, streaming=True),
+                         [("hello▌", "")])
+        note = msg_lines("note", "model: sonnet (x)", 40)
+        self.assertEqual(note, [("(model: sonnet (x))", "dim")])
 
 
 if __name__ == "__main__":

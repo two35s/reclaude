@@ -8,7 +8,7 @@ A terminal client for Claude.ai. It replays your own browser session against Cla
 
 ## Features
 
-- **Line REPL** — an interactive terminal chat with live streaming.
+- **Line REPL or simple TUI** — an interactive terminal chat with live streaming (`--tui` for full-screen).
 - **No API key** — reuses your existing Claude.ai session.
 - **Live streaming** — SSE `content_block_delta` events print as they arrive.
 - **Multi-turn memory** — one server-side conversation per terminal session.
@@ -121,6 +121,7 @@ Follow the on-screen prompts: open a `completion` request in DevTools → Networ
 
 ```bash
 python -m claude_re                                  # interactive REPL
+python -m claude_re --tui                            # simple full-screen chat
 python -m claude_re --prompt "explain SSE"           # single prompt
 python -m claude_re --model haiku                    # choose a model
 python -m claude_re --no-stealth                     # keep chats in browser history
@@ -138,6 +139,7 @@ python -m claude_re --proxy --port 9000              # proxy on a custom port
 | `--auto-fetch` | Launch Chrome and extract the session over CDP. |
 | `--login` | Open Chrome to log in and save the profile, without extracting. |
 | `--manual` | Enter `org_id` / `Cookie` header by hand. |
+| `--tui` | Simple full-screen chat instead of the line REPL. |
 | `--proxy` | Start an OpenAI-compatible HTTP proxy on `localhost:8765` for Crush/opencode integration. |
 | `--port PORT` | Port for `--proxy` mode (default: `8765`). |
 | `--prompt TEXT` | Send a single prompt, then exit. |
@@ -218,6 +220,7 @@ reclaude/
 │   ├── payload.py         # per-request payload builder
 │   ├── http.py            # session reuse, retries, request backend
 │   ├── streaming.py       # SSE parsing, rate-limit handling
+│   ├── tui.py             # simple full-screen chat (--tui)
 │   └── repl.py            # help + model listing
 └── requirements.txt
 ```
