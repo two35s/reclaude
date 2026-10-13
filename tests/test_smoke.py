@@ -110,7 +110,7 @@ class TuiTextTest(unittest.TestCase):
         x, y, bw, bh, vis = dialog_window(30, 100, 9, "model",
                                           "enter pick · esc close", 30)
         self.assertEqual((bw, bh, vis), (36, 11, 9))
-        self.assertEqual((x, y), ((100 - 36) // 2, (30 - 13) // 2))
+        self.assertEqual((x, y), ((100 - 36) // 2, (30 - 11) // 2))
         x2, _, bw2, bh2, vis2 = dialog_window(8, 30, 9, "model", "hint", 30)
         self.assertEqual((bw2, bh2, vis2), (28, 6, 4))
 
