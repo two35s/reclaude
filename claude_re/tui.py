@@ -41,6 +41,16 @@ def box_frame(width, left="", right=""):
     return "╭" + fill(left, True) + "╮", "╰" + fill(right, False) + "╯"
 
 
+def layout(h):
+    """Message-region bottom row + compact-input flag for a height.
+
+    Short terminals (<10 rows) get a single-line input instead of the box
+    so the message stream keeps at least a few rows.
+    """
+    compact = h < 10
+    return (h - 2 if compact else h - 4), compact
+
+
 def wrap(text, width):
     """Word-wrap into lines no longer than `width`; long words hard-split."""
     width = max(1, width)
@@ -205,10 +215,10 @@ class App:
 
     def _header(self, scr, w):
         scr.addstr(0, 0, " reclaude ", curses.A_BOLD)
-        scr.addstr(0, 10, self.model[: w - 12], self.attr("user"))
+        scr.addstr(0, 10, self.model[:max(0, w - 12)], self.attr("user"))
 
     def _messages(self, scr, h, w):
-        top, bottom = 1, h - 4
+        top, bottom = 1, layout(h)[0]
         lines = []
         for i, (role, text) in enumerate(self.messages):
             streaming = self.busy and i == len(self.messages) - 1 and role == "assistant"
@@ -228,6 +238,19 @@ class App:
             scr.addstr(top + i, 0, text[:w], a)
 
     def _input(self, scr, h, w):
+        _, compact = layout(h)
+        maxw = max(1, w - 6)
+        start = max(0, self.cur - maxw + 1)
+        if compact:                       # short screen: prompt line only
+            scr.addstr(h - 2, 0, "> ", self.attr("user") | curses.A_BOLD)
+            scr.addstr(h - 2, 2, self.buf[start:start + maxw])
+            if not self.buf and not self.busy:
+                scr.addstr(h - 2, 2, "type + enter", self.attr("dim"))
+            try:
+                scr.move(h - 2, 2 + self.cur - start)
+            except curses.error:
+                pass
+            return
         top, mid, bot = h - 4, h - 3, h - 2
         state = "working…" if self.busy else ("fresh" if not self.messages else "live")
         frame_top, frame_bot = box_frame(w, "message", f"{self.model} · {state}")
@@ -236,7 +259,7 @@ class App:
         scr.addstr(mid, 0, "│", self.attr("dim"))
         scr.addstr(mid, w - 1, "│", self.attr("dim"))
         scr.addstr(mid, 2, "> ", self.attr("user") | curses.A_BOLD)
-        maxw = w - 6
+        maxw = max(1, w - 6)
         start = max(0, self.cur - maxw + 1)
         scr.addstr(mid, 4, self.buf[start:start + maxw])
         if not self.buf:
@@ -250,6 +273,8 @@ class App:
     def _footer(self, scr, h, w):
         if self.busy:
             left = f" {SPINNER[self.spin % len(SPINNER)]} working…  esc clears input"
+        elif w < 56:
+            left = " enter send · ^n new · ^o model · ? help"
         else:
             left = " enter send · ^n new · ^o model · ? help · ^c quit"
         scr.addstr(h - 1, 0, left[:w], self.attr("dim"))

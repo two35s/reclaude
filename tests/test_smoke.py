@@ -9,7 +9,7 @@ from claude_re import chrome_cookies
 from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
 from claude_re.payload import build_payload
 from claude_re.streaming import _sse_data, _split_lines
-from claude_re.tui import box_frame, msg_lines, wrap
+from claude_re.tui import box_frame, layout, msg_lines, wrap
 
 
 class SseParserTest(unittest.TestCase):
@@ -94,6 +94,11 @@ class TuiTextTest(unittest.TestCase):
         plain_top, plain_bot = box_frame(30)
         self.assertEqual(plain_top, "╭" + "─" * 28 + "╮")
         self.assertEqual(plain_bot, "╰" + "─" * 28 + "╯")
+
+    def test_layout_compacts_on_short_terminals(self):
+        self.assertEqual(layout(30), (26, False))
+        self.assertEqual(layout(10), (6, False))
+        self.assertEqual(layout(8), (6, True))
 
 
 if __name__ == "__main__":
