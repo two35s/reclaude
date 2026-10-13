@@ -35,17 +35,18 @@ WARM = 180          # #d7af87  accents / logo mid
 CREAM = 223         # #ffd7af  logo left (warm gradient)
 ORANGE = 216        # #ffaf87  logo right (warm gradient)
 
-# 3-row block font for the empty-state word.
+# 3-row block font for the empty-state word, redrawn in opencode's 4-column
+# style (█ tops, ▀ bottoms). e/c match opencode's own glyphs exactly.
 GLYPHS = {
-    "r": ["█▀▄", "█▀▄", "▀ ▀"],
-    "e": ["█▀▀", "██▄", "▀▀▀"],
-    "c": ["█▀▀", "█  ", "▀▀▀"],
-    "l": ["█  ", "█  ", "▀▀▀"],
-    "a": ["█▀█", "█▀█", "▀ ▀"],
-    "u": ["█ █", "█ █", "▀▀▀"],
-    "d": ["█▄▄", "█ █", "▀▀▀"],
-    "n": ["█▀█", "█ █", "▀ ▀"],
-    "o": ["█▀█", "█ █", "▀▀▀"],
+    "r": ["█▀▀█", "█▀▀ ", "▀  ▀"],
+    "e": ["█▀▀█", "█▀▀▀", "▀▀▀▀"],
+    "c": ["█▀▀▀", "█   ", "▀▀▀▀"],
+    "l": ["█   ", "█   ", "█▀▀▀"],
+    "a": ["█▀▀█", "█▀ █", "▀ ▀▀"],
+    "u": ["█  █", "█  █", "▀▀▀▀"],
+    "d": ["█▀▀█", "█  █", " ▀▀█"],
+    "n": ["█▀▀▄", "█  █", "▀▀▀▀"],
+    "o": ["█▀▀█", "█  █", "▀▀▀▀"],
 }
 
 

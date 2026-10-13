@@ -104,7 +104,7 @@ class TuiLayoutTest(unittest.TestCase):
     def test_block_word_rows_are_rectangular(self):
         rows = block_word("reclaude")
         self.assertEqual(len(rows), 3)
-        self.assertEqual({len(r) for r in rows}, {31})
+        self.assertEqual({len(r) for r in rows}, {39})
 
     def test_content_column_centres_and_clamps(self):
         app = App(None, "claude-sonnet-5-5", stealth=False)
