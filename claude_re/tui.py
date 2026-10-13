@@ -103,13 +103,38 @@ class App:
         text = self.buf.strip()
         if not text or self.busy:
             return
+        self.buf, self.cur, self.off = "", 0, 0
         self.messages.append(["user", text])
         live = ["assistant", ""]
         self.messages.append(live)
-        self.buf, self.cur, self.off = "", 0, 0
+        self.off = 0
         self.busy = True
         threading.Thread(target=self._worker, args=(live, text),
                          daemon=True).start()
+
+    def _command(self, text):
+        """Slash commands (no network). Returns True to quit."""
+        parts = text[1:].split(None, 1)
+        cmd = parts[0].lower() if parts else ""
+        arg = parts[1].strip() if len(parts) > 1 else ""
+        if cmd in ("quit", "exit", "q"):
+            return True
+        if cmd == "new":
+            self.fresh()
+        elif cmd == "model":
+            if arg:
+                self.set_model(arg)
+            else:
+                self.dialog, self.sel = "models", 0
+        elif cmd == "models":
+            names = ", ".join(MODEL_ALIASES)
+            self.messages.append(["note", f"models: {names}"])
+        elif cmd == "help":
+            self.dialog, self.sel = "help", 0
+        else:
+            self.messages.append(["note", f"unknown command: {text} — try /help"])
+        self.off = 0
+        return False
 
     def _worker(self, live, text):
         try:
@@ -252,7 +277,8 @@ class App:
                 pass
             return
         top, mid, bot = h - 4, h - 3, h - 2
-        state = "working…" if self.busy else ("fresh" if not self.messages else "live")
+        has_chat = any(r in ("user", "assistant") for r, _ in self.messages)
+        state = "working…" if self.busy else ("live" if has_chat else "fresh")
         frame_top, frame_bot = box_frame(w, "message", f"{self.model} · {state}")
         scr.addstr(top, 0, frame_top, self.attr("dim"))
         scr.addstr(bot, 0, frame_bot, self.attr("dim"))
@@ -274,9 +300,9 @@ class App:
         if self.busy:
             left = f" {SPINNER[self.spin % len(SPINNER)]} working…  esc clears input"
         elif w < 56:
-            left = " enter send · ^n new · ^o model · ? help"
+            left = " /new /model /help /quit"
         else:
-            left = " enter send · ^n new · ^o model · ? help · ^c quit"
+            left = " /new /model /models /help /quit · enter to send"
         scr.addstr(h - 1, 0, left[:w], self.attr("dim"))
 
     def _dialog(self, scr, h, w):
@@ -284,10 +310,10 @@ class App:
             items = [f"{a:<12} {f}" for a, f in MODEL_ALIASES.items()]
             title = "model (enter picks, esc closes)"
         else:
-            items = ["enter send", "^n new conversation", "^o switch model",
-                     "up/down pgup/pgdn scroll", "left/right home/end cursor",
-                     "esc clear input / close", "^c ^d quit"]
-            title = "keys (any key closes)"
+            items = ["/new new conversation", "/model [name] switch model",
+                     "/models list models", "/help this list", "/quit exit",
+                     "enter send · ↑↓ scroll · esc clear · ^c quit"]
+            title = "commands (any key closes)"
         bw = min(w - 4, max(len(title) + 4, max(len(i) for i in items) + 4))
         bh = min(h - 4, len(items) + 4)
         x, y = (w - bw) // 2, (h - bh) // 2
@@ -313,7 +339,8 @@ class App:
         if ch == curses.KEY_F1 or (ch == ord("?") and not self.buf):
             self.dialog, self.sel = "help", 0
         elif ch in (10, 13):
-            self.send()
+            if self._enter():
+                return False
         elif ch == 14:
             self.fresh()
         elif ch == 15:
@@ -347,6 +374,17 @@ class App:
             self.buf = self.buf[:self.cur] + chr(ch) + self.buf[self.cur:]
             self.cur += 1
         return True
+
+    def _enter(self):
+        """Enter key: slash lines run as commands (/quit exits); else send."""
+        if self.buf.strip().startswith("/"):
+            text = self.buf.strip()
+            self.buf, self.cur = "", 0
+            if self.busy:
+                return False
+            return self._command(text)
+        self.send()
+        return False
 
     def _model_key(self, ch):
         names = list(MODEL_ALIASES)

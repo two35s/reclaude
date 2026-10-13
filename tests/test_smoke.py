@@ -101,5 +101,33 @@ class TuiTextTest(unittest.TestCase):
         self.assertEqual(layout(8), (6, True))
 
 
+class TuiCommandTest(unittest.TestCase):
+    """Slash commands run locally without network."""
+
+    def _app(self):
+        from claude_re.tui import App
+        return App(None, "claude-sonnet-5-5", stealth=False)
+
+    def test_unknown_command_becomes_note(self):
+        app = self._app()
+        self.assertFalse(app._command("/bogus"))
+        self.assertEqual(app.messages[-1][0], "note")
+
+    def test_new_clears_and_model_switches(self):
+        app = self._app()
+        app.messages.append(["user", "hi"])
+        app._command("/new")
+        self.assertEqual(app.messages, [])
+        app._command("/model haiku")
+        self.assertEqual(app.model, "claude-haiku-5-5")
+        self.assertTrue(app.messages[-1][1].startswith("model:"))
+
+    def test_quit_and_help(self):
+        app = self._app()
+        self.assertTrue(app._command("/quit"))
+        self.assertFalse(app._command("/help"))
+        self.assertEqual(app.dialog, "help")
+
+
 if __name__ == "__main__":
     unittest.main()
