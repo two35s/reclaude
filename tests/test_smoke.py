@@ -106,6 +106,14 @@ class TuiLayoutTest(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual({len(r) for r in rows}, {31})
 
+    def test_content_column_centres_and_clamps(self):
+        app = App(None, "claude-sonnet-5-5", stealth=False)
+        x, cw = app.col(130)
+        self.assertEqual(cw, 76)
+        self.assertEqual(x, (130 - 76) // 2)
+        x2, cw2 = app.col(50)
+        self.assertEqual((x2, cw2), (0, 50))
+
 
 if __name__ == "__main__":
     unittest.main()

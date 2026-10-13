@@ -24,14 +24,16 @@ from .streaming import stream_prompt
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 # opencode palette (RGB), approximated with the 256-colour cube below.
-BASE = 233          # #121212  background
-PANEL = 236         # #303030  composer / dialog background
+BASE = 232          # #080808  background (≈ opencode #0a0a0a)
+PANEL = 234         # #1c1c1c  dialog/box background (≈ opencode #141414–#1e1e1e)
 TEXT = 255          # #eeeeee
 DIM = 245           # #8a8a8a
 GREEN = 114         # #87d787  additions / success
 RED = 204           # #ff5f87  errors
 PURPLE = 141        # #af87ff  reasoning
-WARM = 180          # #d7af87  accents / logo
+WARM = 180          # #d7af87  accents / logo mid
+CREAM = 223         # #ffd7af  logo left (warm gradient)
+ORANGE = 216        # #ffaf87  logo right (warm gradient)
 
 # 3-row block font for the empty-state word.
 GLYPHS = {
@@ -146,6 +148,7 @@ def cwd_label():
 
 class App:
     SIDEBAR = 34          # right Context panel width
+    COLW = 76             # centred content column (opencode floats a narrow box)
 
     def __init__(self, creds, model, stealth):
         self.creds = creds
@@ -273,13 +276,15 @@ class App:
         if curses.COLORS >= 256:
             pairs = [(TEXT, BASE), (DIM, BASE), (GREEN, BASE), (RED, BASE),
                      (PURPLE, BASE), (WARM, BASE), (231, BASE), (TEXT, PANEL),
-                     (DIM, PANEL), (240, BASE), (WARM, PANEL)]
+                     (DIM, PANEL), (240, BASE), (WARM, PANEL),
+                     (CREAM, BASE), (ORANGE, BASE)]
         else:  # basic fallback
             pairs = [(curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
                      (curses.COLOR_GREEN, -1), (curses.COLOR_RED, -1),
                      (curses.COLOR_MAGENTA, -1), (curses.COLOR_YELLOW, -1),
                      (curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
                      (curses.COLOR_WHITE, -1), (curses.COLOR_WHITE, -1),
+                     (curses.COLOR_YELLOW, -1), (curses.COLOR_YELLOW, -1),
                      (curses.COLOR_YELLOW, -1)]
         for i, (fg, bg) in enumerate(pairs, 1):
             curses.init_pair(i, fg, bg)
@@ -287,11 +292,13 @@ class App:
     # pair indices
     P_TEXT, P_DIM, P_GREEN, P_RED, P_PURPLE, P_WARM = 1, 2, 3, 4, 5, 6
     P_WHITE, P_PTEXT, P_PDIM, P_BORDER, P_PWARM = 7, 8, 9, 10, 11
+    P_CREAM, P_ORANGE = 12, 13
 
     def attr(self, kind):
         m = {"": self.P_TEXT, "user": self.P_WHITE, "note": self.P_PURPLE,
              "dim": self.P_DIM, "green": self.P_GREEN, "red": self.P_RED,
-             "warm": self.P_WARM, "border": self.P_BORDER,
+             "warm": self.P_WARM, "cream": self.P_CREAM, "orange": self.P_ORANGE,
+             "border": self.P_BORDER,
              "panel": self.P_PTEXT, "panel-dim": self.P_PDIM,
              "panel-warm": self.P_PWARM}
         return curses.color_pair(m.get(kind, self.P_TEXT))
@@ -354,20 +361,25 @@ class App:
         return self.SIDEBAR if (w >= 88 and self.chat().messages) else 0
 
     def _tabs(self, scr, w):
-        # session tab strip: spinner + active title, other titles, then "+ New session"
+        # session tab strip: spinner + titles, then "+ New session" (no pill)
         x = 1
         for i, c in enumerate(self.chats):
-            spin = f"{SPINNER[self.spin // 2 % len(SPINNER)]} " if (self.busy and i == self.active) else ""
+            spin = f"{SPINNER[self.spin % len(SPINNER)]} " if (self.busy and i == self.active) else ""
             label = f"{spin}{trunc(c.title, 30)}"
             if x + len(label) >= w - 15:
                 break
-            scr.addstr(0, x, label, self.attr("warm") if i == self.active else self.attr("dim"))
+            scr.addstr(0, x, label, self.attr("user") if i == self.active else self.attr("dim"))
             x += len(label) + 3
         scr.addstr(0, x, "+ New session", self.attr("dim"))
 
     def main_w(self, w):
         sw = self.side_w(w)
         return w - sw - (1 if sw else 0)
+
+    def col(self, mw):
+        """Centred content column inside the main area: (x_offset, width)."""
+        cw = min(mw, self.COLW)
+        return (mw - cw) // 2, cw
 
     def _layout(self, h):
         """Return (empty, composer_top, footer_row). Empty chats centre the
@@ -379,33 +391,46 @@ class App:
 
     def _body(self, scr, h, w):
         mw = self.main_w(w)
+        x, cw = self.col(mw)
         top, bottom = 1, h - 7           # message region rows
         vh = bottom - top
         chat = self.chat()
 
         if not chat.messages:
-            self._empty_state(scr, self._layout(h)[1], mw, h)
+            self._empty_state(scr, self._layout(h)[1], x, cw, h)
         else:
-            body = render_messages(chat, mw)
+            body = render_messages(chat, cw - 2)
             maxoff = max(0, len(body) - vh)
             if self.follow:
                 self.off = maxoff
             self.off = max(0, min(self.off, maxoff))
             for i, (text, kind) in enumerate(body[self.off:self.off + vh]):
-                scr.addstr(top + i, 0, text[:mw], self.attr(kind))
+                scr.addstr(top + i, x, text[:cw], self.attr(kind))
 
         sw = self.side_w(w)
         if sw:
             self._sidebar(scr, top, bottom, w - sw, sw)
 
-    def _empty_state(self, scr, comp_top, width, h):
+    def _logo_row(self, scr, y, x, row):
+        # warm gradient across the wordmark: cream → warm → orange
+        n = len(row)
+        cuts = (n // 3, 2 * n // 3)
+        kinds = ("cream", "warm", "orange")
+        start = 0
+        for cut, kind in zip((*cuts, n), kinds):
+            seg = row[start:cut]
+            if seg:
+                scr.addstr(y, x + start, seg, self.attr(kind))
+            start = cut
+
+    def _empty_state(self, scr, comp_top, x, width, h):
         g = max(1, comp_top - 6)         # group top: logo, then hint
         logo = block_word("reclaude")
         for i, row in enumerate(logo):
             if row:
-                scr.addstr(g + i, max(0, (width - len(row)) // 2), row, self.attr("warm"))
+                self._logo_row(scr, g + i, x + max(0, (width - len(row)) // 2), row)
         hint = "Ask anything below"
-        scr.addstr(g + 4, max(0, (width - len(hint)) // 2), hint, self.attr("dim"))
+        scr.addstr(g + 4, x + max(0, (width - len(hint)) // 2), hint, self.attr("dim"))
 
     def _sidebar(self, scr, top, bottom, x, sw):
         for y in range(top, bottom):
@@ -413,13 +438,13 @@ class App:
         chat = self.chat()
         chars = sum(len(m.text) for m in chat.messages)
         rows = [
-            ("Context", "panel-warm"),
-            (f"~{chars // 4:,} tokens", "panel"),
-            (f"{len(chat.messages)} messages", "panel-dim"),
-            ("", "panel"),
-            ("Model", "panel-warm"),
-            (trunc(chat.model, sw - 2), "panel"),
-            ("FREE", "panel-dim"),
+            ("Context", "warm"),
+            (f"~{chars // 4:,} tokens", ""),
+            (f"{len(chat.messages)} messages", "dim"),
+            ("", ""),
+            ("Model", "warm"),
+            (trunc(chat.model, sw - 2), ""),
+            ("FREE", "dim"),
         ]
         for i, (text, kind) in enumerate(rows):
             if top + i < bottom:
@@ -427,12 +452,13 @@ class App:
 
     def _composer(self, scr, h, w):
         mw = self.main_w(w)
-        left = 1
-        cw = mw - 3                      # box width (gutter left, gap right)
+        x, colw = self.col(mw)
+        left = x + 1
+        cw = colw - 3                    # box width (gutter left, gap right)
         top = self._layout(h)[1]
         chat = self.chat()
-        for y in range(top, top + 5):    # panel background behind the box
-            scr.addstr(y, 0, " " * mw, self.attr("panel"))
+        for y in range(top, top + 5):    # subtle box fill, base bg elsewhere
+            scr.addstr(y, left, " " * cw, self.attr("panel"))
 
         def box_row(y, text, kind="panel"):
             scr.addstr(y, left, "┃", self.attr("panel-warm"))
@@ -454,11 +480,13 @@ class App:
 
     def _footer(self, scr, h, w):
         mw = self.main_w(w)
+        x, colw = self.col(mw)
+        left, cw = x + 1, colw - 3
         y = self._layout(h)[2]
-        scr.addstr(y, 4, trunc(cwd_label(), max(0, mw // 2)), self.attr("dim"))
+        scr.addstr(y, left - 1, trunc(cwd_label(), max(0, cw // 2)), self.attr("dim"))
         right = "esc interrupt   ctrl+c quit" if self.busy else \
             "ctrl+o models   ctrl+n new   ? help"
-        scr.addstr(y, max(4, mw - len(right) - 2), right, self.attr("dim"))
+        scr.addstr(y, max(left - 1, left + cw - len(right)), right, self.attr("dim"))
 
     def _statusbar(self, scr, h, w):
         scr.addstr(h - 1, 2, f"⊙ {len(self.chats)} session  /help", self.attr("dim"))
