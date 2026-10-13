@@ -12,6 +12,13 @@ from .compat import HAS_CFFI
 from .config import DEFAULT_MODEL, DIR, MODEL_ALIASES, URL_BASE
 from .payload import build_payload
 
+# Rate limiting and retry constants
+MAX_RATE_RETRIES = 2
+MAX_JITTER = 1.5
+DEFAULT_RETRY_WAIT = 30
+MAX_WAIT_CAP = 300
+REQUEST_TIMEOUT = http_mod.REQUEST_TIMEOUT
+
 
 def _split_lines(buffer, chunk):
     """Append a chunk and return (remaining_buffer, complete_lines).
@@ -109,7 +116,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
     resp = None
     try:
         resp = http_mod.request("POST", endpoint, headers=headers,
-                                json_body=payload, timeout=120,
+                                json_body=payload, timeout=REQUEST_TIMEOUT,
                                 content_callback=on_chunk)
     except Exception as e:
         print(f"\n[!] Request error: {e}")
@@ -209,7 +216,7 @@ def stream_prompt(creds, prompt, model=DEFAULT_MODEL, stealth=True,
 
 
 def handle_rate_limit(resp, creds, prompt, model, stealth,
-                      session_state=None, _retries=0, _max_retries=2, on_text=None):
+                      session_state=None, _retries=0, _max_retries=MAX_RATE_RETRIES, on_text=None):
     """Handle 429: honor Retry-After, fallback to haiku once, bounded retries.
 
     Preserves session_state so conversation memory survives the retry.
@@ -241,12 +248,12 @@ def handle_rate_limit(resp, creds, prompt, model, stealth,
                              session_state, _rate_retries=_retries, on_text=on_text)
 
     # Already on haiku — wait with jitter and retry (bounded)
-    wait = 30
+    wait = DEFAULT_RETRY_WAIT
     try:
         wait = int(retry)
     except Exception:
         pass
-    wait = min(wait, 300) + random.uniform(0, 1.5)
+    wait = min(wait, MAX_WAIT_CAP) + random.uniform(0, MAX_JITTER)
     print(f"[*] Waiting {wait:.1f}s (attempt {_retries + 1}/{MAX_RETRIES})...")
     time.sleep(wait)
     return stream_prompt(creds, prompt, model, stealth, session_state,

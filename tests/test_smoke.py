@@ -6,7 +6,8 @@ import unittest
 from unittest import mock
 
 from claude_re import chrome_cookies
-from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
+from claude_re.config import (AES_KEY_SIZE, CHROME_COOKIE_SCHEMA_VERSION_V24,
+                             MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model)
 from claude_re.payload import build_payload
 from claude_re.streaming import _sse_data, _split_lines
 from claude_re.tui import box_frame, dialog_window, layout, msg_lines, wrap
@@ -59,16 +60,19 @@ class CookieDecryptTest(unittest.TestCase):
         plaintext = b"\x00" * 32 + b"session"
         with mock.patch.object(chrome_cookies, "_aes_decrypt",
                                return_value=plaintext + b"\x01"):
-            value = chrome_cookies._decrypt(b"v10\x00", b"k" * 16,
+            value = chrome_cookies._decrypt(b"v10\x00", b"k" * AES_KEY_SIZE,
                                             strip_prefix=True)
         self.assertEqual(value, "session")
 
     def test_prefix_kept_when_version_old(self):
         with mock.patch.object(chrome_cookies, "_aes_decrypt",
                                return_value=b"session\x01"):
-            value = chrome_cookies._decrypt(b"v10\x00", b"k" * 16,
+            value = chrome_cookies._decrypt(b"v10\x00", b"k" * AES_KEY_SIZE,
                                             strip_prefix=False)
         self.assertEqual(value, "session")
+
+    def test_version_constant(self):
+        self.assertEqual(CHROME_COOKIE_SCHEMA_VERSION_V24, 24)
 
 
 class TuiTextTest(unittest.TestCase):

@@ -7,6 +7,16 @@ from .config import IMPERSONATE_TARGET, UA, URL_BASE
 
 _HTTP_SESSION = None
 
+# HTTP retry constants
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_TIMEOUT = 15
+CONVERSATION_TIMEOUT = 15
+REQUEST_TIMEOUT = 120
+MAX_BACKOFF_DELAY = 8
+MAX_RETRY_WAIT = 60
+BACKOFF_JITTER_RANGE = 0.5
+RETRY_AFTER_JITTER_RANGE = 1.0
+
 
 def get_session():
     """Return a shared curl_cffi Session, or None if curl_cffi is missing."""
@@ -44,7 +54,7 @@ def make_headers(creds):
     }
 
 
-def request(method, url, headers=None, json_body=None, timeout=15,
+def request(method, url, headers=None, json_body=None, timeout=DEFAULT_TIMEOUT,
             content_callback=None):
     """Send one request through the best available backend.
 
@@ -85,13 +95,13 @@ def delete_conversation(creds, conv_id):
         "Cookie": creds.cookie_header()
     }
     try:
-        request("DELETE", url, headers=headers, timeout=10)
+        request("DELETE", url, headers=headers, timeout=DEFAULT_TIMEOUT)
     except Exception:
         pass  # best-effort cleanup
 
 
-def fetch_with_retries(method, url, headers=None, json_body=None, timeout=15,
-                       max_retries=3):
+def fetch_with_retries(method, url, headers=None, json_body=None, timeout=DEFAULT_TIMEOUT,
+                       max_retries=DEFAULT_MAX_RETRIES):
     """Transient-error retry with exponential backoff + jitter.
 
     Retries only 429/5xx and network errors. Returns response or None.
@@ -117,11 +127,11 @@ def fetch_with_retries(method, url, headers=None, json_body=None, timeout=15,
                     wait = int(ra) if ra else 2 ** attempt
                 except Exception:
                     wait = 2 ** attempt
-                wait = min(wait, 60) + random.uniform(0, 1)
+                wait = min(wait, MAX_RETRY_WAIT) + random.uniform(0, RETRY_AFTER_JITTER_RANGE)
                 time.sleep(wait)
                 continue
         if attempt < max_retries:
-            time.sleep(min(2 ** attempt, 8) + random.uniform(0, 0.5))
+            time.sleep(min(2 ** attempt, MAX_BACKOFF_DELAY) + random.uniform(0, BACKOFF_JITTER_RANGE))
     return last_resp
 
 
@@ -141,9 +151,9 @@ def create_conversation(creds, conv_id, model):
     }
     payload = {"name": "", "model": model, "uuid": conv_id}
     resp = fetch_with_retries("POST", url, headers=headers,
-                              json_body=payload, timeout=15, max_retries=2)
+                              json_body=payload, timeout=CONVERSATION_TIMEOUT, max_retries=2)
     if resp is None:
-        print(f"[!] Could not reach the server to start a conversation.")
+        print("[!] Could not reach the server to start a conversation.")
         return False
     if resp.status_code in (200, 201):
         return True

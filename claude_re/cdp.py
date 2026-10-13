@@ -14,13 +14,19 @@ import socket
 import struct
 import urllib.request
 
+# CDP constants
+CDP_HTTP_TIMEOUT = 10
+CDP_WEBSOCKET_TIMEOUT = 15
+CDP_EVALUATE_TIMEOUT = 20
+WEBSOCKET_RECEIVE_BUFFER = 65536
 
-def _http_get_json(url, timeout=10):
+
+def _http_get_json(url, timeout=CDP_HTTP_TIMEOUT):
     with urllib.request.urlopen(url, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def list_targets(cdp_port, timeout=10):
+def list_targets(cdp_port, timeout=CDP_HTTP_TIMEOUT):
     """Return DevTools /json/list targets."""
     return _http_get_json(f"http://127.0.0.1:{cdp_port}/json/list", timeout)
 
@@ -28,7 +34,7 @@ def list_targets(cdp_port, timeout=10):
 class CDPConnection:
     """Tiny blocking CDP client over one websocket."""
 
-    def __init__(self, ws_url, timeout=15):
+    def __init__(self, ws_url, timeout=CDP_WEBSOCKET_TIMEOUT):
         self._sock = self._handshake(ws_url, timeout)
         self._next_id = 0
         self._buf = b""
@@ -79,7 +85,7 @@ class CDPConnection:
 
     def _recv_frame(self):
         while len(self._buf) < 2:
-            chunk = self._sock.recv(65536)
+            chunk = self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
             if not chunk:
                 raise ConnectionError("CDP socket closed")
             self._buf += chunk
@@ -90,23 +96,23 @@ class CDPConnection:
         idx = 2
         if length == 126:
             while len(self._buf) < idx + 2:
-                self._buf += self._sock.recv(65536)
+                self._buf += self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
             length = struct.unpack("!H", self._buf[idx:idx + 2])[0]
             idx += 2
         elif length == 127:
             while len(self._buf) < idx + 8:
-                self._buf += self._sock.recv(65536)
+                self._buf += self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
             length = struct.unpack("!Q", self._buf[idx:idx + 8])[0]
             idx += 8
         if masked:
             while len(self._buf) < idx + 4:
-                self._buf += self._sock.recv(65536)
+                self._buf += self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
             mask = self._buf[idx:idx + 4]
             idx += 4
         else:
             mask = None
         while len(self._buf) < idx + length:
-            chunk = self._sock.recv(65536)
+            chunk = self._sock.recv(WEBSOCKET_RECEIVE_BUFFER)
             if not chunk:
                 raise ConnectionError("CDP socket closed mid-frame")
             self._buf += chunk
@@ -137,7 +143,7 @@ class CDPConnection:
 
     # ── CDP rpc ──────────────────────────────────────────
 
-    def call(self, method, params=None, timeout=15):
+    def call(self, method, params=None, timeout=CDP_WEBSOCKET_TIMEOUT):
         self._next_id += 1
         msg_id = self._next_id
         self._send_text(json.dumps({"id": msg_id, "method": method,
@@ -161,7 +167,7 @@ class CDPConnection:
         finally:
             self._sock.settimeout(None)
 
-    def evaluate(self, expression, timeout=20):
+    def evaluate(self, expression, timeout=CDP_EVALUATE_TIMEOUT):
         """Run JS in the page, awaiting promises. Returns the remote value."""
         res = self.call("Runtime.evaluate", {
             "expression": expression,
