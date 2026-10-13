@@ -9,7 +9,7 @@ from claude_re import chrome_cookies
 from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
 from claude_re.payload import build_payload
 from claude_re.streaming import _sse_data, _split_lines
-from claude_re.tui import msg_lines, wrap
+from claude_re.tui import box_frame, msg_lines, wrap
 
 
 class SseParserTest(unittest.TestCase):
@@ -85,6 +85,15 @@ class TuiTextTest(unittest.TestCase):
                          [("hello▌", "")])
         note = msg_lines("note", "model: sonnet (x)", 40)
         self.assertEqual(note, [("(model: sonnet (x))", "dim")])
+
+    def test_box_frame_width_and_label_sides(self):
+        top, bot = box_frame(30, "message", "sonnet · live")
+        self.assertEqual((len(top), len(bot)), (30, 30))
+        self.assertTrue(top.startswith("╭─ message ") and top.endswith("╮"))
+        self.assertTrue(bot.startswith("╰") and bot.endswith("sonnet · live ╯"))
+        plain_top, plain_bot = box_frame(30)
+        self.assertEqual(plain_top, "╭" + "─" * 28 + "╮")
+        self.assertEqual(plain_bot, "╰" + "─" * 28 + "╯")
 
 
 if __name__ == "__main__":

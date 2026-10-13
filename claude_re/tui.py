@@ -21,6 +21,26 @@ from .streaming import stream_prompt
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+def trunc(s, n):
+    s = str(s)
+    return s if len(s) <= n else s[:max(0, n - 1)] + "…"
+
+
+def box_frame(width, left="", right=""):
+    """Top/bottom rows of the input box; label left on top, right on bottom."""
+    width = max(12, width)
+    inner = width - 2
+
+    def fill(label, align_left):
+        tag = f"─ {trunc(label, max(0, inner - 4))} " if label else "─"
+        tag = tag[:inner]
+        if align_left:
+            return (tag + "─" * inner)[:inner]
+        return ("─" * max(0, inner - len(tag)) + tag)[:inner]
+
+    return "╭" + fill(left, True) + "╮", "╰" + fill(right, False) + "╯"
+
+
 def wrap(text, width):
     """Word-wrap into lines no longer than `width`; long words hard-split."""
     width = max(1, width)
@@ -188,7 +208,7 @@ class App:
         scr.addstr(0, 10, self.model[: w - 12], self.attr("user"))
 
     def _messages(self, scr, h, w):
-        top, bottom = 1, h - 3
+        top, bottom = 1, h - 4
         lines = []
         for i, (role, text) in enumerate(self.messages):
             streaming = self.busy and i == len(self.messages) - 1 and role == "assistant"
@@ -208,15 +228,22 @@ class App:
             scr.addstr(top + i, 0, text[:w], a)
 
     def _input(self, scr, h, w):
-        scr.addstr(h - 3, 0, "─" * (w - 1), self.attr("dim"))
-        prompt, maxw = "> ", w - 3
-        scr.addstr(h - 2, 0, prompt, self.attr("user") | curses.A_BOLD)
+        top, mid, bot = h - 4, h - 3, h - 2
+        state = "working…" if self.busy else ("fresh" if not self.messages else "live")
+        frame_top, frame_bot = box_frame(w, "message", f"{self.model} · {state}")
+        scr.addstr(top, 0, frame_top, self.attr("dim"))
+        scr.addstr(bot, 0, frame_bot, self.attr("dim"))
+        scr.addstr(mid, 0, "│", self.attr("dim"))
+        scr.addstr(mid, w - 1, "│", self.attr("dim"))
+        scr.addstr(mid, 2, "> ", self.attr("user") | curses.A_BOLD)
+        maxw = w - 6
         start = max(0, self.cur - maxw + 1)
-        scr.addstr(h - 2, 2, self.buf[start:start + maxw])
-        if not self.buf and not self.busy:
-            scr.addstr(h - 2, 2, "type a message, enter to send", self.attr("dim"))
+        scr.addstr(mid, 4, self.buf[start:start + maxw])
+        if not self.buf:
+            hint = "waiting for reply…" if self.busy else "type a message, enter to send"
+            scr.addstr(mid, 4, hint[:maxw], self.attr("dim"))
         try:
-            scr.move(h - 2, 2 + self.cur - start)
+            scr.move(mid, 4 + self.cur - start)
         except curses.error:
             pass
 
