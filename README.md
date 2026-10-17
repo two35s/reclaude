@@ -41,9 +41,20 @@ One server-side conversation per session gives multi-turn memory; stealth mode d
 ```bash
 python -m claude_re --proxy                 # OpenAI-compatible API on :8765
 python -m claude_re --proxy --port 9000
+python -m claude_re --proxy &               # run in the background
 ```
 
-Point [Crush](https://github.com/charmbracelet/crush) or any OpenAI client at `http://localhost:8765/v1`.
+The proxy must be running for clients to see the models — if it exits, they disappear until you restart it. (Optional: a `KeepAlive: true` launchd agent keeps it up across reboots.)
+
+Point [Crush](https://github.com/charmbracelet/crush), [OpenCode](https://opencode.ai), or any OpenAI client at `http://localhost:8765/v1`.
+
+Streaming (`text/event-stream`) and non-streaming requests are both supported.
+
+**Tool calling works.** OpenAI `tools` are emulated in text: the proxy appends the tool specs to the prompt, asks the model to emit fenced `tool_call` blocks, and converts them into real OpenAI `tool_calls` in the response. Send the results back as `tool` messages on the next request and the model continues. (Claude.ai's native tool channel keeps the stream open waiting for a result, which deadlocks clients that act only on finished responses — so the proxy doesn't use it.)
+
+### Use as a normal OpenCode model
+
+With the proxy running, `claude/sonnet`, `claude/haiku`, and `claude/opus` appear in OpenCode's `/models` picker like any other provider. Select one and chat normally — tools (read/edit/bash), streaming, and multi-turn all work through your Claude.ai account.
 
 ## OpenCode MCP server
 
@@ -100,9 +111,9 @@ Your `sessionKey` is a password: never share, upload, or commit the credential f
 
 ```bash
 pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q              # tests
-.venv/bin/python -m ruff check .            # lint
-.venv/bin/python -m ruff format --check .   # formatting
+PYTHONPATH=. .venv/bin/python -m pytest -q   # tests
+.venv/bin/python -m ruff check .             # lint
+.venv/bin/python -m ruff format --check .    # formatting
 ```
 
 ## License
