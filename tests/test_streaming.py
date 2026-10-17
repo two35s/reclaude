@@ -1,6 +1,14 @@
-"""SSE parsing: multibyte chars survive chunk splits; only complete lines pass through."""
+"""SSE parsing + transport-failure behavior."""
 
+import claude_re.streaming as st
 from claude_re.streaming import _split_lines, _sse_data
+
+
+class _FakeCreds:
+    org_id = "org"
+
+    def cookie_header(self):
+        return "session=x"
 
 
 def test_multibyte_char_split_across_chunks():
@@ -25,3 +33,14 @@ def test_sse_data_ignores_non_data_lines():
     assert _sse_data(b": keep-alive") is None
     assert _sse_data(b"event: message_stop") is None
     assert _sse_data(b"data: [DONE]") == "[DONE]"
+
+
+def test_transport_failure_returns_none_not_empty_string(monkeypatch):
+    # Callers (proxy, MCP) treat "" as a successful blank reply; None is the
+    # only signal that nothing happened.
+    def boom(*a, **k):
+        raise ConnectionError("no network")
+
+    monkeypatch.setattr(st.http_mod, "request", boom)
+    out = st.stream_prompt(_FakeCreds(), "hi", session_state={"conv_id": "c", "created": True})
+    assert out is None

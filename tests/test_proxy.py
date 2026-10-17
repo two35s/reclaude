@@ -54,3 +54,25 @@ def test_model_id_mapping():
     assert _resolve_model_from_openai_id("reclaude/sonnet") == "claude-sonnet-5-5"
     assert _resolve_model_from_openai_id("haiku") == "claude-haiku-5-5"
     assert _resolve_model_from_openai_id("claude-sonnet-4-6") == "claude-sonnet-4-6"
+
+
+def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
+    # Regression guard for issue #3: a failed upstream must not read as an
+    # empty 200 with finish_reason stop.
+    import io
+
+    import claude_re.proxy as proxy_mod
+
+    handler = object.__new__(proxy_mod._Handler)
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda *a, **k: None
+    handler.send_header = lambda *a, **k: None
+    handler.end_headers = lambda *a, **k: None
+    handler.creds = None
+
+    monkeypatch.setattr(proxy_mod, "stream_prompt", lambda *a, **k: None)
+    handler._stream_response("hi", "claude-sonnet-5-5", "reclaude/sonnet", {})
+
+    out = handler.wfile.getvalue().decode()
+    assert '"error"' in out
+    assert out.rstrip().endswith("data: [DONE]")

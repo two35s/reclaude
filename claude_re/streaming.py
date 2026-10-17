@@ -10,7 +10,7 @@ import uuid
 
 from . import http as http_mod
 from .compat import HAS_CFFI
-from .config import DEFAULT_MODEL, DIR, MODEL_ALIASES, URL_BASE
+from .config import _CONFIG_DIR, DEFAULT_MODEL, MODEL_ALIASES, URL_BASE
 from .payload import build_payload
 
 # Rate limiting and retry constants
@@ -97,31 +97,35 @@ def stream_prompt(
     error_body = ""
     status_code = [0]  # mutable for callback scope
 
+    def consume_data(data):
+        """Handle one SSE data payload; True means stop consuming."""
+        if data.strip() == "[DONE]":
+            return True
+        try:
+            obj = json.loads(data)
+        except json.JSONDecodeError:
+            return False
+        t = obj.get("type", "")
+        if t == "content_block_delta":
+            delta = obj.get("delta", {})
+            if delta.get("type") == "text_delta":
+                txt = delta.get("text", "")
+                parts.append(txt)
+                emit(txt)
+        elif t == "error":
+            err = obj.get("error", {})
+            print(f"\n[!] {err.get('message', str(obj))}")
+        elif t == "message_stop":
+            return True
+        return False
+
     def on_chunk(chunk: bytes):
         nonlocal buffer
         raw_body.append(chunk)
         buffer, lines = _split_lines(buffer, chunk)
         for raw_line in lines:
             data = _sse_data(raw_line)
-            if data is None:
-                continue
-            if data.strip() == "[DONE]":
-                return
-            try:
-                obj = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            t = obj.get("type", "")
-            if t == "content_block_delta":
-                delta = obj.get("delta", {})
-                if delta.get("type") == "text_delta":
-                    txt = delta.get("text", "")
-                    parts.append(txt)
-                    emit(txt)
-            elif t == "error":
-                err = obj.get("error", {})
-                print(f"\n[!] {err.get('message', str(obj))}")
-            elif t == "message_stop":
+            if data is not None and consume_data(data):
                 return
 
     # ── Send request (reused session + consistent fingerprint) ─
@@ -138,26 +142,17 @@ def stream_prompt(
     except Exception as e:
         print(f"\n[!] Request error: {e}")
 
+    # Transport failure with nothing streamed: return None, never "" — an
+    # empty string reads to callers (proxy/MCP) as a successful blank reply.
+    if resp is None and not parts:
+        return None
+
     # ── Handle non-streaming fallback ────────────────────
-    if resp and not HAS_CFFI:
-        if resp.status_code == 200:
-            for line in resp.text.split("\n"):
-                data = _sse_data(line)
-                if data is None:
-                    continue
-                if data.strip() == "[DONE]":
-                    break
-                try:
-                    obj = json.loads(data)
-                except Exception:
-                    continue
-                t = obj.get("type", "")
-                if t == "content_block_delta":
-                    delta = obj.get("delta", {})
-                    if delta.get("type") == "text_delta":
-                        txt = delta.get("text", "")
-                        parts.append(txt)
-                        emit(txt)
+    if resp and not HAS_CFFI and resp.status_code == 200:
+        for line in resp.text.split("\n"):
+            data = _sse_data(line)
+            if data is not None and consume_data(data):
+                break
 
     # ── Check status / detect errors ───────────────────────
     if resp:
@@ -236,11 +231,12 @@ def stream_prompt(
         return None
 
     full = "".join(parts)
-    print()
+    if on_text is None:  # only echo the trailing blank line in stdout-streaming mode
+        print()
 
     # ── Save last response ───────────────────────────────
     if full:
-        with open(os.path.join(DIR, "last_response.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(_CONFIG_DIR, "last_response.txt"), "w", encoding="utf-8") as f:
             f.write(full)
     return full
 

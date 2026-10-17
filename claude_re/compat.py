@@ -27,5 +27,6 @@ else:
         std_requests = None  # type: ignore
 
 if not HAS_CFFI and not std_requests:
-    print("[!] pip install curl_cffi")
-    sys.exit(1)
+    # Raise instead of exiting: importing a library must not kill the
+    # interpreter.  __main__ turns this into the friendly CLI message.
+    raise ImportError("reclaude needs an HTTP backend: pip install curl_cffi")

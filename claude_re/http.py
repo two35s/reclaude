@@ -1,12 +1,14 @@
 """HTTP layer: reused session, retries, conversation CRUD."""
 
 import random
+import threading
 import time
 
 from .compat import HAS_CFFI, cffi_requests, std_requests
 from .config import IMPERSONATE_TARGET, UA, URL_BASE
 
 _HTTP_SESSION = None
+_SESSION_LOCK = threading.Lock()
 
 # HTTP retry constants
 DEFAULT_MAX_RETRIES = 3
@@ -25,11 +27,14 @@ def get_session():
     if _HTTP_SESSION is not None:
         return _HTTP_SESSION
     if HAS_CFFI:
-        try:
-            _HTTP_SESSION = cffi_requests.Session(impersonate=IMPERSONATE_TARGET)
-            return _HTTP_SESSION
-        except Exception:
-            return None
+        with _SESSION_LOCK:
+            if _HTTP_SESSION is not None:  # re-check: another thread may have built it
+                return _HTTP_SESSION
+            try:
+                _HTTP_SESSION = cffi_requests.Session(impersonate=IMPERSONATE_TARGET)
+                return _HTTP_SESSION
+            except Exception:
+                return None
     return None
 
 
@@ -99,11 +104,7 @@ def request(
 def delete_conversation(creds, conv_id):
     """Delete a conversation so it doesn't appear in browser sidebar."""
     url = f"{URL_BASE}/api/organizations/{creds.org_id}/chat_conversations/{conv_id}"
-    headers = {
-        "User-Agent": UA,
-        "Content-Type": "application/json",
-        "Cookie": creds.cookie_header(),
-    }
+    headers = make_headers(creds)
     try:
         request("DELETE", url, headers=headers, timeout=DEFAULT_TIMEOUT)
     except Exception:
@@ -158,13 +159,7 @@ def create_conversation(creds, conv_id, model):
     unsupported model or an expired session) so the caller can just bail out.
     """
     url = f"{URL_BASE}/api/organizations/{creds.org_id}/chat_conversations"
-    headers = {
-        "User-Agent": UA,
-        "Content-Type": "application/json",
-        "Referer": "https://claude.ai/",
-        "Origin": "https://claude.ai",
-        "Cookie": creds.cookie_header(),
-    }
+    headers = make_headers(creds)
     payload = {"name": "", "model": model, "uuid": conv_id}
     resp = fetch_with_retries(
         "POST", url, headers=headers, json_body=payload, timeout=CONVERSATION_TIMEOUT, max_retries=2

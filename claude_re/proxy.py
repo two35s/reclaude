@@ -23,6 +23,7 @@ Or as LOCAL_ENDPOINT for the archived opencode binary:
     LOCAL_ENDPOINT=http://localhost:8765 opencode
 """
 
+import hmac
 import json
 import os
 import threading
@@ -228,7 +229,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._not_found()
 
     def _authorized(self):
-        return not PROXY_TOKEN or self.headers.get("Authorization") == f"Bearer {PROXY_TOKEN}"
+        return not PROXY_TOKEN or hmac.compare_digest(
+            self.headers.get("Authorization") or "", f"Bearer {PROXY_TOKEN}"
+        )
 
     # ── model list ───────────────────────────────────────────────────
 
@@ -264,6 +267,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if length > MAX_BODY_BYTES:
             self.rfile.read(MAX_BODY_BYTES + 1)  # bounded drain so the 413 is delivered
+            self.close_connection = True  # body left unread; keep-alive would desync
             self._error(413, "Request body too large")
             return
         raw = self.rfile.read(length)
@@ -295,6 +299,13 @@ class _Handler(BaseHTTPRequestHandler):
 
         if conv_key:
             with self.registry_lock:
+                # Cap the registry so weeks of proxy uptime don't grow it
+                # forever.  Evicts the oldest conversation (dicts keep
+                # insertion order); the server-side conversation itself
+                # stays until removed by hand in the sidebar.
+                # shortcut: no TTL — only new keys can push an old one out.
+                if conv_key not in self.session_registry and len(self.session_registry) >= 256:
+                    self.session_registry.pop(next(iter(self.session_registry)))
                 session_state = self.session_registry.setdefault(conv_key, {})
         else:
             session_state = {}

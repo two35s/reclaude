@@ -118,7 +118,8 @@ def _browser_for_profile(profile_dir):
     """Identify which browser a resolved profile dir belongs to."""
     p = os.path.abspath(profile_dir)
     for name, (root, _s, _a, _i) in _browser_table().items():
-        if os.path.abspath(os.path.expanduser(root)) in p:
+        root = os.path.abspath(os.path.expanduser(root))
+        if p == root or p.startswith(root + os.sep):
             return name
     return "Chrome"
 

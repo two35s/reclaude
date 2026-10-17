@@ -8,7 +8,7 @@ import time
 from . import http as http_mod
 from .chrome import do_login
 from .compat import HAS_CFFI
-from .config import CRED_FILE, DIR, SYSTEM_TIMEZONE, resolve_model
+from .config import _CONFIG_DIR, CRED_FILE, SYSTEM_TIMEZONE, resolve_model
 from .creds import CredentialManager
 from .repl import print_help, print_models
 from .streaming import stream_prompt
@@ -177,7 +177,7 @@ def main():
                 if i < len(prompts) - 1:
                     time.sleep(DEFAULT_BATCH_DELAY)
         finally:
-            out = os.path.join(DIR, "batch_results.json")
+            out = os.path.join(_CONFIG_DIR, "batch_results.json")
             with open(out, "w", encoding="utf-8") as f:
                 json.dump(results, f, indent=2, ensure_ascii=False)
             print(f"[+] Saved -> {out}")
