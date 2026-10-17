@@ -196,7 +196,7 @@ class App:
     def _worker(self, live, text):
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                stream_prompt(
+                out = stream_prompt(
                     self.creds,
                     text,
                     self.model,
@@ -204,6 +204,8 @@ class App:
                     self.state,
                     on_text=lambda t: self.queue.put(("text", t)),
                 )
+            if out is None:  # failure reason was printed into the discarded stdout buffer
+                self.queue.put(("note", "no response — check connection or session"))
         except Exception as e:
             self.queue.put(("note", f"error: {e}"))
         self.queue.put(("done", None))

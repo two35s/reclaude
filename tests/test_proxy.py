@@ -1,5 +1,7 @@
 """OpenAI translation helpers: prompt building and model-id mapping."""
 
+import json
+
 from claude_re.proxy import _openai_messages_to_prompt, _resolve_model_from_openai_id
 
 
@@ -76,3 +78,36 @@ def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
     out = handler.wfile.getvalue().decode()
     assert '"error"' in out
     assert out.rstrip().endswith("data: [DONE]")
+
+
+def test_registry_cap_evicts_oldest_and_keeps_new_key():
+    import io
+
+    import claude_re.proxy as proxy_mod
+
+    body = json.dumps(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "reclaude/sonnet",
+            "stream": True,
+        }
+    ).encode()
+    handler = object.__new__(proxy_mod._Handler)
+    handler.headers = {"Content-Length": str(len(body)), "X-Conversation-Id": "new-key"}
+    handler.rfile = io.BytesIO(body)
+    handler.session_registry = {f"old-{i}": {} for i in range(256)}
+    handler.registry_lock = proxy_mod.threading.Lock()
+    captured = {}
+    # stub out the actual completion call, keep the session_state it received
+    handler._stream_response = lambda prompt, model, model_id, state, tools=None: captured.update(
+        state=state
+    )
+
+    handler._chat_completions()
+
+    assert "old-0" not in handler.session_registry  # oldest evicted
+    assert (
+        "new-key" in handler.session_registry
+        and handler.session_registry["new-key"] is captured["state"]
+    )
+    assert len(handler.session_registry) == 256

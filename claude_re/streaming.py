@@ -236,8 +236,13 @@ def stream_prompt(
 
     # ── Save last response ───────────────────────────────
     if full:
-        with open(os.path.join(_CONFIG_DIR, "last_response.txt"), "w", encoding="utf-8") as f:
+        # Write-then-replace: two proxy threads writing the same path
+        # directly would interleave; os.replace is atomic per swap.
+        path = os.path.join(_CONFIG_DIR, "last_response.txt")
+        tmp = f"{path}.{uuid.uuid4().hex[:8]}.tmp"  # per-write name; threads share the path
+        with open(tmp, "w", encoding="utf-8") as f:
             f.write(full)
+        os.replace(tmp, path)
     return full
 
 

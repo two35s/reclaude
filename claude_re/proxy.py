@@ -229,8 +229,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._not_found()
 
     def _authorized(self):
+        # Bytes: compare_digest raises on non-ASCII str, and header bytes
+        # decode as latin-1, so garbage headers must not crash the handler.
         return not PROXY_TOKEN or hmac.compare_digest(
-            self.headers.get("Authorization") or "", f"Bearer {PROXY_TOKEN}"
+            (self.headers.get("Authorization") or "").encode(),
+            f"Bearer {PROXY_TOKEN}".encode(),
         )
 
     # ── model list ───────────────────────────────────────────────────
