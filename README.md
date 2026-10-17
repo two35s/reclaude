@@ -4,6 +4,12 @@ Terminal client for Claude.ai — replays your own browser session against Claud
 
 > Research tool. It runs under your Claude.ai account: its limits, tiers, and billing still apply. It does not bypass rate limits or paywalls.
 
+## Demo
+
+![reclaude's models in OpenCode](docs/demo.gif)
+
+With the proxy running, `reclaude/haiku` shows up in OpenCode's `/models` picker like any other provider. Pick it, ask, watch the reply stream in — all through your Claude.ai session, no API key.
+
 ## Install
 
 ```bash
