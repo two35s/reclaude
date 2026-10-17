@@ -49,13 +49,15 @@ The proxy must be running for clients to see the models — if it exits, they di
 
 Point [Crush](https://github.com/charmbracelet/crush), [OpenCode](https://opencode.ai), or any OpenAI client at `http://localhost:8765/v1`.
 
-Streaming (`text/event-stream`) and non-streaming requests are both supported.
+Streaming (`text/event-stream`) and non-streaming requests are both supported. Every streamed reply is also written to `~/.config/claude_re/last_response.txt` — handy when a client shows you nothing.
+
+On a `429` the proxy returns the error instead of silently downgrading you to a weaker model — retries and model choice belong to the client (OpenCode retries on its own).
 
 **Tool calling works.** OpenAI `tools` are emulated in text: the proxy appends the tool specs to the prompt, asks the model to emit fenced `tool_call` blocks, and converts them into real OpenAI `tool_calls` in the response. Send the results back as `tool` messages on the next request and the model continues. (Claude.ai's native tool channel keeps the stream open waiting for a result, which deadlocks clients that act only on finished responses — so the proxy doesn't use it.)
 
 ### Use as a normal OpenCode model
 
-With the proxy running, `claude/sonnet`, `claude/haiku`, and `claude/opus` appear in OpenCode's `/models` picker like any other provider. Select one and chat normally — tools (read/edit/bash), streaming, and multi-turn all work through your Claude.ai account.
+With the proxy running, `reclaude/sonnet`, `reclaude/haiku`, and `reclaude/opus` appear in OpenCode's `/models` picker like any other provider. Select one and chat normally — tools (read/edit/bash), streaming, and multi-turn all work through your Claude.ai account.
 
 `python -m claude_re --opencode` prints the ready-to-paste `providers` block for your global config. Or paste it by hand:
 
@@ -121,19 +123,19 @@ Notes:
 
 - **Shared conversation.** All `claude_ask` calls reuse one Claude.ai conversation for the server's lifetime, so follow-ups keep context. It is **not** stealth-deleted and will appear in your Claude.ai sidebar until you remove it.
 - **Diagnostics on stderr.** reclaude's progress/error output goes to stderr, so it never corrupts the MCP protocol stream on stdout.
-- **Limitations.** Text-only passthrough — no image output, and no tool calls come back from Claude.ai. Requests run under your Claude.ai account, so plan limits apply. One call can take up to the HTTP timeout (120 s), longer under rate limiting; raise `timeout` if needed.
+- **Limitations.** Text-only passthrough — no image output, and no tool calls come back from Claude.ai. Requests run under your Claude.ai account, so plan limits apply. One call can take up to the HTTP timeout (120 s), longer under rate limiting.
 - **Troubleshooting.** `Session invalid or expired` → re-run `python -m claude_re --auto-fetch`; the next `claude_ask` picks up the new credentials (no restart needed). If the tool is missing, check OpenCode's MCP logs and that the venv path in `command` is absolute and correct.
 
 ## More flags
 
-`--batch FILE` one prompt per line → `batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting · `--opencode` register the MCP tool with OpenCode and print the provider config.
+`--batch FILE` one prompt per line → `~/.config/claude_re/batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting · `--opencode` register the MCP tool with OpenCode and print the provider config.
 
 ## If it breaks
 
 | Symptom | Fix |
 |---|---|
 | `Session invalid or expired` | re-run `--from-chrome` or `--auto-fetch` |
-| `429` rate limited | wait, or `/model haiku` |
+| `429` rate limited | wait, or switch model (`/model haiku` in the CLI/TUI) |
 | Keychain prompt | click **Always Allow**, retry |
 
 ## Security
