@@ -10,6 +10,7 @@ Terminal client for Claude.ai — replays your own browser session against Claud
 git clone https://github.com/two35s/reclaude.git && cd reclaude
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+python -m claude_re --opencode   # register the MCP tool with OpenCode (see below)
 ```
 
 ## Login (once)
@@ -56,27 +57,59 @@ Streaming (`text/event-stream`) and non-streaming requests are both supported.
 
 With the proxy running, `claude/sonnet`, `claude/haiku`, and `claude/opus` appear in OpenCode's `/models` picker like any other provider. Select one and chat normally — tools (read/edit/bash), streaming, and multi-turn all work through your Claude.ai account.
 
-## OpenCode MCP server
-
-Expose reclaude to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai through reclaude when you ask.
-
-Add the server to `~/.config/opencode/opencode.jsonc`:
+`python -m claude_re --opencode` prints the ready-to-paste `providers` block for your global config. Or paste it by hand:
 
 ```jsonc
 {
-  "mcp": {
+  "providers": {
     "reclaude": {
-      "type": "local",
-      "command": ["/absolute/path/to/reclaude/.venv/bin/python", "-m", "claude_re.mcp_server"],
-      "cwd": "/absolute/path/to/reclaude",
-      "enabled": true,
-      "timeout": 300000
+      "name": "reclaude",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://localhost:8765/v1" },
+      "models": {
+        "sonnet": { "name": "Claude Sonnet", "modelID": "reclaude/sonnet" },
+        "haiku": { "name": "Claude Haiku", "modelID": "reclaude/haiku" },
+        "opus": { "name": "Claude Opus", "modelID": "reclaude/opus" }
+      }
     }
   }
 }
 ```
 
-Restart OpenCode. Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts aliases (`sonnet`, `haiku`, `opus`) or a full model id.
+## OpenCode MCP server
+
+Expose reclaude to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai through reclaude when you ask.
+
+Install it with one command, run from this checkout:
+
+```bash
+python -m claude_re --opencode
+```
+
+That calls OpenCode's own `opencode mcp add`, so your existing config (comments included) is preserved. Restart OpenCode, then check `opencode mcp list`.
+
+Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts aliases (`sonnet`, `haiku`, `opus`) or a full model id.
+
+<details>
+<summary>Or add it by hand</summary>
+
+```jsonc
+{
+  "mcp": {
+    "servers": {
+      "reclaude": {
+        "type": "local",
+        "command": ["/absolute/path/to/reclaude/.venv/bin/python", "-m", "claude_re.mcp_server"],
+        "environment": { "PYTHONPATH": "/absolute/path/to/reclaude" }
+      }
+    }
+  }
+}
+```
+
+`PYTHONPATH` is what makes the module importable from any working directory, so no `cwd` is needed.
+
+</details>
 
 Check the handshake standalone:
 
@@ -93,7 +126,7 @@ Notes:
 
 ## More flags
 
-`--batch FILE` one prompt per line → `batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting.
+`--batch FILE` one prompt per line → `batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting · `--opencode` register the MCP tool with OpenCode and print the provider config.
 
 ## If it breaks
 

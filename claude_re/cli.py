@@ -58,7 +58,19 @@ def main():
         help="Start an OpenAI-compatible proxy (for Crush/opencode integration)",
     )
     ap.add_argument("--port", type=int, default=8765, help="Port for --proxy mode (default: 8765)")
+    ap.add_argument(
+        "--opencode",
+        action="store_true",
+        help="Register the MCP tool with OpenCode (all projects); print provider config",
+    )
     args = ap.parse_args()
+
+    # ── OpenCode registration ────────────────────────────
+    if args.opencode:
+        from .opencode import install
+
+        install(port=args.port)
+        return
 
     # ── Clear session ────────────────────────────────────
     if args.clear_session:
