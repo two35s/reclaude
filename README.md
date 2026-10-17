@@ -45,6 +45,41 @@ python -m claude_re --proxy --port 9000
 
 Point [Crush](https://github.com/charmbracelet/crush) or any OpenAI client at `http://localhost:8765/v1`.
 
+## OpenCode MCP server
+
+Expose reclaude to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai through reclaude when you ask.
+
+Add the server to `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "mcp": {
+    "reclaude": {
+      "type": "local",
+      "command": ["/absolute/path/to/reclaude/.venv/bin/python", "-m", "claude_re.mcp_server"],
+      "cwd": "/absolute/path/to/reclaude",
+      "enabled": true,
+      "timeout": 300000
+    }
+  }
+}
+```
+
+Restart OpenCode. Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts aliases (`sonnet`, `haiku`, `opus`) or a full model id.
+
+Check the handshake standalone:
+
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | .venv/bin/python -m claude_re.mcp_server
+```
+
+Notes:
+
+- **Shared conversation.** All `claude_ask` calls reuse one Claude.ai conversation for the server's lifetime, so follow-ups keep context. It is **not** stealth-deleted and will appear in your Claude.ai sidebar until you remove it.
+- **Diagnostics on stderr.** reclaude's progress/error output goes to stderr, so it never corrupts the MCP protocol stream on stdout.
+- **Limitations.** Text-only passthrough — no image output, and no tool calls come back from Claude.ai. Requests run under your Claude.ai account, so plan limits apply. One call can take up to the HTTP timeout (120 s), longer under rate limiting; raise `timeout` if needed.
+- **Troubleshooting.** `Session invalid or expired` → re-run `python -m claude_re --auto-fetch`; the next `claude_ask` picks up the new credentials (no restart needed). If the tool is missing, check OpenCode's MCP logs and that the venv path in `command` is absolute and correct.
+
 ## More flags
 
 `--batch FILE` one prompt per line → `batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting.
