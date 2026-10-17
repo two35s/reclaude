@@ -135,8 +135,9 @@ def fetch_with_retries(
             return resp
         else:
             last_resp = resp
-            # Honor Retry-After on 429
-            if resp.status_code == 429:
+            # Honor Retry-After on 429 (but don't sleep after the final
+            # attempt — the result is already decided).
+            if resp.status_code == 429 and attempt < max_retries:
                 try:
                     ra = resp.headers.get("Retry-After", "")
                     wait = int(ra) if ra else 2**attempt

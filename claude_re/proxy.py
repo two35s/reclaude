@@ -28,7 +28,7 @@ import os
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .config import DEFAULT_MODEL, MODEL_ALIASES, resolve_model
 from .streaming import stream_prompt
@@ -46,7 +46,7 @@ PROXY_TOKEN = os.environ.get("RECLAUDE_PROXY_TOKEN", "")
 # ── Payload translation ────────────────────────────────────────────────────
 
 
-def _openai_messages_to_prompt(messages, tools=None):
+def _openai_messages_to_prompt(messages, tools=None, recent_only=False):
     """Convert OpenAI messages array to a plain text prompt.
 
     We reconstruct a multi-turn context string.  System prompts are
@@ -54,6 +54,11 @@ def _openai_messages_to_prompt(messages, tools=None):
     last user message becomes the active prompt; prior turns are
     embedded in it as a readable transcript so claude.ai's server-side
     conversation history still provides the real memory.
+
+    ``recent_only`` drops turns before the last user message (system
+    messages are always kept). Used when a persistent conversation id
+    exists: the server-side conversation already holds earlier turns,
+    so re-sending them would double the token cost every turn.
 
     Tool calls are emulated in text: ``tools`` become a spec + protocol
     block in the system section, an assistant turn carrying ``tool_calls``
@@ -63,7 +68,16 @@ def _openai_messages_to_prompt(messages, tools=None):
     parts = []
     system_parts = []
 
-    for msg in messages:
+    start = 0
+    if recent_only:
+        start = next(
+            (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"), 0
+        )
+
+    for i, msg in enumerate(messages):
+        # Keep system instructions from any position; drop other early turns.
+        if i < start and msg.get("role") != "system":
+            continue
         role = msg.get("role", "")
         content = msg.get("content") or ""
         # content may be a list of content blocks (vision payloads, etc.)
@@ -269,13 +283,16 @@ class _Handler(BaseHTTPRequestHandler):
         stream = req.get("stream", False)
         tools = req.get("tools") or []
 
-        # Build flat prompt (tools are described in-text when present)
-        prompt = _openai_messages_to_prompt(messages, tools=tools)
-
         # Each request may carry an optional conversation_id header so
         # multi-turn sessions share server-side context.  Clients that
         # don't send one get a per-request ephemeral context.
         conv_key = self.headers.get("X-Conversation-Id") or req.get("user")
+
+        # Build flat prompt (tools are described in-text when present).
+        # With a persistent conversation the server already remembers
+        # earlier turns, so only the recent ones are re-sent.
+        prompt = _openai_messages_to_prompt(messages, tools=tools, recent_only=bool(conv_key))
+
         if conv_key:
             with self.registry_lock:
                 session_state = self.session_registry.setdefault(conv_key, {})
@@ -326,14 +343,29 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, OSError):
                 error_flag[0] = True
 
-        stream_prompt(
+        full = stream_prompt(
             self.creds,
             prompt,
             model=model,
             stealth=False,  # proxy mode — caller manages lifetime
             session_state=session_state,
             on_text=on_text,
+            allow_fallback=False,  # the client (OpenCode) owns retries; never swap models silently
         )
+
+        if full is None and not error_flag[0]:
+            # Headers are already sent, so surface the failure in-band:
+            # an empty 200 with finish_reason "stop" reads as a blank reply.
+            try:
+                self.wfile.write(
+                    b'data: {"error": {"message": "upstream Claude error - see proxy stderr",'
+                    b' "type": "proxy_error"}}\n\n'
+                )
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except (BrokenPipeError, OSError):
+                pass
+            return
 
         if not error_flag[0]:
             try:
@@ -366,6 +398,8 @@ class _Handler(BaseHTTPRequestHandler):
             model=model,
             stealth=False,
             session_state=session_state,
+            on_text=lambda _t: None,  # don't echo the response to the proxy's stdout
+            allow_fallback=False,
         )
         if full is None:
             self._error(502, "Upstream Claude API returned no response")
@@ -409,7 +443,10 @@ def run_proxy(creds, port=8765):
     _Handler.creds = creds
     _Handler.session_registry = {}
 
-    server = HTTPServer(("127.0.0.1", port), _Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
+    # shortcut: concurrent first-turn requests on the same conversation id can
+    # each create a server-side conversation (one gets orphaned in the sidebar).
+    # Upgrade to per-key locks if that ever shows up in practice.
 
     print(f"\n[proxy] reclaude OpenAI-compatible proxy listening on http://localhost:{port}")
     print("\n  Register in Crush (~/.config/crush/crushrc):")

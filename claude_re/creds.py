@@ -144,7 +144,7 @@ class CredentialManager:
         proc.terminate()
 
         if self.session_key:
-            print(f"[+] Session key: {self.session_key[:25]}...")
+            print("[+] Session key: found")
             self.save()
             return True
         print("[!] No sessionKey cookie found")
@@ -183,7 +183,7 @@ class CredentialManager:
             return False
 
         print(f"[+] org_id:      {self.org_id}")
-        print(f"[+] session key: {self.session_key[:25]}...")
+        print("[+] session key: found")
         self.save()
         return True
 

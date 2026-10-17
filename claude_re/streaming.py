@@ -53,6 +53,7 @@ def stream_prompt(
     session_state=None,
     _rate_retries=0,
     on_text=None,
+    allow_fallback=True,
 ):
     """Send prompt with real-time streaming. Returns full response text.
 
@@ -62,6 +63,8 @@ def stream_prompt(
 
     _rate_retries is internal: it threads the rate-limit retry budget through
     the 429 -> handle_rate_limit -> stream_prompt cycle so retries stay bounded.
+    allow_fallback=False disables the silent haiku downgrade on 429 (proxy mode:
+    the client owns retries and expects the model it asked for).
     """
 
     # One server-side conversation per session, created on the first prompt.
@@ -226,6 +229,7 @@ def stream_prompt(
                 session_state,
                 _retries=_rate_retries,
                 on_text=on_text,
+                allow_fallback=allow_fallback,
             )
         else:
             print(f"\n[!] HTTP {sc}: {error_body[:200]}")
@@ -251,12 +255,18 @@ def handle_rate_limit(
     _retries=0,
     _max_retries=MAX_RATE_RETRIES,
     on_text=None,
+    allow_fallback=True,
 ):
     """Handle 429: honor Retry-After, fallback to haiku once, bounded retries.
 
     Preserves session_state so conversation memory survives the retry.
     Adds jitter to avoid thundering-herd on shared Retry-After values.
+    With allow_fallback=False the model is never swapped and no wait/retry
+    happens here — the caller (proxy client) decides what to do.
     """
+    if not allow_fallback:
+        print("\n[!] Rate limited (429). Returning error; the client decides on retry.")
+        return None
     MAX_RETRIES = _max_retries
     if _retries >= MAX_RETRIES:
         print(f"\n[!] Rate limited ({MAX_RETRIES} retries). Giving up — try later or /model haiku.")
@@ -280,7 +290,14 @@ def handle_rate_limit(
     if model != haiku_id:
         print("[*] Falling back to haiku...")
         return stream_prompt(
-            creds, prompt, haiku_id, stealth, session_state, _rate_retries=_retries, on_text=on_text
+            creds,
+            prompt,
+            haiku_id,
+            stealth,
+            session_state,
+            _rate_retries=_retries,
+            on_text=on_text,
+            allow_fallback=allow_fallback,
         )
 
     # Already on haiku — wait with jitter and retry (bounded)
@@ -293,5 +310,12 @@ def handle_rate_limit(
     print(f"[*] Waiting {wait:.1f}s (attempt {_retries + 1}/{MAX_RETRIES})...")
     time.sleep(wait)
     return stream_prompt(
-        creds, prompt, model, stealth, session_state, _rate_retries=_retries + 1, on_text=on_text
+        creds,
+        prompt,
+        model,
+        stealth,
+        session_state,
+        _rate_retries=_retries + 1,
+        on_text=on_text,
+        allow_fallback=allow_fallback,
     )
