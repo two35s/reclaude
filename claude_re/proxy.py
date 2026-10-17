@@ -32,6 +32,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from .config import DEFAULT_MODEL, MODEL_ALIASES, resolve_model
 from .streaming import stream_prompt
+from .tool_calls import (
+    ToolCallParser,
+    parse_tool_calls,
+    render_assistant_calls,
+    render_tool_prompt,
+)
 
 # Proxy hardening: cap request bodies; optional bearer token via env.
 MAX_BODY_BYTES = 1_000_000
@@ -40,7 +46,7 @@ PROXY_TOKEN = os.environ.get("RECLAUDE_PROXY_TOKEN", "")
 # ── Payload translation ────────────────────────────────────────────────────
 
 
-def _openai_messages_to_prompt(messages):
+def _openai_messages_to_prompt(messages, tools=None):
     """Convert OpenAI messages array to a plain text prompt.
 
     We reconstruct a multi-turn context string.  System prompts are
@@ -48,6 +54,11 @@ def _openai_messages_to_prompt(messages):
     last user message becomes the active prompt; prior turns are
     embedded in it as a readable transcript so claude.ai's server-side
     conversation history still provides the real memory.
+
+    Tool calls are emulated in text: ``tools`` become a spec + protocol
+    block in the system section, an assistant turn carrying ``tool_calls``
+    is replayed as the same fence syntax it was asked to emit, and ``tool``
+    turns come back as ``[Tool result]`` so the model can continue.
     """
     parts = []
     system_parts = []
@@ -69,7 +80,17 @@ def _openai_messages_to_prompt(messages):
         elif role == "user":
             parts.append(f"[User]: {content}")
         elif role == "assistant":
+            calls = msg.get("tool_calls") or []
+            if calls:
+                fence = render_assistant_calls(calls)
+                content = f"{content}\n{fence}" if content else fence
             parts.append(f"[Assistant]: {content}")
+        elif role == "tool":
+            parts.append(f"[Tool result {msg.get('name') or 'tool'}]: {content}")
+
+    tool_block = render_tool_prompt(tools)
+    if tool_block:
+        system_parts.append(tool_block)
 
     prompt = "\n\n".join(parts)
     if system_parts:
@@ -92,8 +113,13 @@ def _resolve_model_from_openai_id(model_id):
 # ── OpenAI SSE format helpers ──────────────────────────────────────────────
 
 
-def _sse_chunk(content, model, finish_reason=None):
+def _sse_chunk(content, model, finish_reason=None, tool_calls=None):
     """Format one SSE data chunk in OpenAI streaming format."""
+    delta = {}
+    if content is not None:
+        delta["content"] = content
+    if tool_calls:
+        delta["tool_calls"] = tool_calls
     chunk = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:10]}",
         "object": "chat.completion.chunk",
@@ -102,7 +128,7 @@ def _sse_chunk(content, model, finish_reason=None):
         "choices": [
             {
                 "index": 0,
-                "delta": ({"content": content} if content is not None else {}),
+                "delta": delta,
                 "finish_reason": finish_reason,
             }
         ],
@@ -110,8 +136,32 @@ def _sse_chunk(content, model, finish_reason=None):
     return f"data: {json.dumps(chunk)}\n\n".encode()
 
 
-def _non_stream_response(full_text, model):
+def _tool_call_chunks(tool_calls):
+    """One OpenAI streaming delta per tool call, carrying id/name/arguments.
+
+    OpenAI clients accumulate these by `index`; sending the full call in a
+    single delta is valid and avoids inventing argument fragmentation.
+    """
+    chunks = []
+    for i, call in enumerate(tool_calls):
+        chunks.append(
+            {
+                "index": i,
+                "id": call["id"],
+                "type": "function",
+                "function": call["function"],
+            }
+        )
+    return chunks
+
+
+def _non_stream_response(full_text, model, tool_calls=None):
     """Format a complete (non-streaming) OpenAI chat.completion response."""
+    message = {"role": "assistant", "content": full_text}
+    finish_reason = "stop"
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+        finish_reason = "tool_calls"
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex[:10]}",
         "object": "chat.completion",
@@ -120,8 +170,8 @@ def _non_stream_response(full_text, model):
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": full_text},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
@@ -217,9 +267,10 @@ class _Handler(BaseHTTPRequestHandler):
         model_id = req.get("model", DEFAULT_MODEL)
         model = _resolve_model_from_openai_id(model_id)
         stream = req.get("stream", False)
+        tools = req.get("tools") or []
 
-        # Build flat prompt
-        prompt = _openai_messages_to_prompt(messages)
+        # Build flat prompt (tools are described in-text when present)
+        prompt = _openai_messages_to_prompt(messages, tools=tools)
 
         # Each request may carry an optional conversation_id header so
         # multi-turn sessions share server-side context.  Clients that
@@ -232,11 +283,11 @@ class _Handler(BaseHTTPRequestHandler):
             session_state = {}
 
         if stream:
-            self._stream_response(prompt, model, model_id, session_state)
+            self._stream_response(prompt, model, model_id, session_state, tools)
         else:
-            self._sync_response(prompt, model, model_id, session_state)
+            self._sync_response(prompt, model, model_id, session_state, tools)
 
-    def _stream_response(self, prompt, model, model_id, session_state):
+    def _stream_response(self, prompt, model, model_id, session_state, tools=None):
         """Stream the response as SSE in OpenAI format."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -259,8 +310,16 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         error_flag = [False]
+        # Tool calls are parsed out of the text stream; only text outside a
+        # fence is forwarded as content, so the client never sees the raw
+        # fence syntax.
+        parser = ToolCallParser() if tools else None
 
         def on_text(chunk):
+            if parser is not None:
+                chunk = parser.feed(chunk)
+                if not chunk:
+                    return
             try:
                 self.wfile.write(_sse_chunk(chunk, model_id))
                 self.wfile.flush()
@@ -278,13 +337,28 @@ class _Handler(BaseHTTPRequestHandler):
 
         if not error_flag[0]:
             try:
-                self.wfile.write(_sse_chunk(None, model_id, finish_reason="stop"))
+                tool_calls = None
+                finish_reason = "stop"
+                if parser is not None:
+                    tail, tool_calls = parser.finish()
+                    if tail:
+                        self.wfile.write(_sse_chunk(tail, model_id))
+                    if tool_calls:
+                        self.wfile.write(
+                            _sse_chunk(
+                                None,
+                                model_id,
+                                tool_calls=_tool_call_chunks(tool_calls),
+                            )
+                        )
+                        finish_reason = "tool_calls"
+                self.wfile.write(_sse_chunk(None, model_id, finish_reason=finish_reason))
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             except (BrokenPipeError, OSError):
                 pass
 
-    def _sync_response(self, prompt, model, model_id, session_state):
+    def _sync_response(self, prompt, model, model_id, session_state, tools=None):
         """Collect the full response then return it as one JSON object."""
         full = stream_prompt(
             self.creds,
@@ -296,7 +370,10 @@ class _Handler(BaseHTTPRequestHandler):
         if full is None:
             self._error(502, "Upstream Claude API returned no response")
             return
-        body = json.dumps(_non_stream_response(full, model_id)).encode()
+        tool_calls = None
+        if tools:
+            full, tool_calls = parse_tool_calls(full)
+        body = json.dumps(_non_stream_response(full, model_id, tool_calls)).encode()
         self._send(200, "application/json", body)
 
     # ── helpers ──────────────────────────────────────────────────────
