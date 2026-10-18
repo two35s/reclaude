@@ -24,7 +24,7 @@ DEFAULT_BATCH_DELAY = 2
 def main():
     print()
     print("  ╔════════════════════════════════════════════════════╗")
-    print("  ║  Claude.ai RE Client v4 — Secure + Stealth        ║")
+    print("  ║  Claude.ai RE Client v4 — Secure + Stealth         ║")
     print("  ╚════════════════════════════════════════════════════╝")
     print()
 
