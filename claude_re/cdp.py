@@ -122,15 +122,15 @@ class CDPConnection:
         self._buf = self._buf[idx + length :]
         if mask:
             payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        return opcode, payload
+        return bool(b1 & 0x80), opcode, payload
 
     def _recv_text(self):
+        # A message may be split across frames (opcode 0x1 starts, 0x0
+        # continues); keep reading until the frame with FIN so large
+        # responses (e.g. Storage.getCookies) are not truncated.
         parts = []
         while True:
-            # NOTE: _recv_frame discards the FIN bit; CDP responses are small
-            # single-frame texts, so we read one text frame per message and
-            # leaveasync events to be skipped by the caller.
-            opcode, payload = self._recv_frame()
+            fin, opcode, payload = self._recv_frame()
             if opcode == 0x8:  # close
                 raise ConnectionError("CDP websocket closed by Chrome")
             if opcode == 0x9:  # ping → pong
@@ -140,7 +140,8 @@ class CDPConnection:
                 continue
             if opcode in (0x1, 0x0):  # text / continuation
                 parts.append(payload)
-                break
+                if fin:
+                    break
         return b"".join(parts).decode("utf-8")
 
     # ── CDP rpc ──────────────────────────────────────────

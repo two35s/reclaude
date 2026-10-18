@@ -4,7 +4,7 @@ import random
 import threading
 import time
 
-from .compat import HAS_CFFI, cffi_requests, std_requests
+from .compat import HAS_CFFI, cffi_requests
 from .config import IMPERSONATE_TARGET, UA, URL_BASE
 
 _HTTP_SESSION = None
@@ -77,28 +77,22 @@ def request(
         return sess.post(
             url, json=json_body, headers=headers, timeout=timeout, content_callback=content_callback
         )
-    if HAS_CFFI:
-        if method == "GET":
-            return cffi_requests.get(
-                url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=timeout
-            )
-        if method == "DELETE":
-            return cffi_requests.delete(
-                url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=timeout
-            )
-        return cffi_requests.post(
-            url,
-            json=json_body,
-            headers=headers,
-            impersonate=IMPERSONATE_TARGET,
-            content_callback=content_callback,
-            timeout=timeout,
-        )
     if method == "GET":
-        return std_requests.get(url, headers=headers, timeout=timeout)
+        return cffi_requests.get(
+            url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=timeout
+        )
     if method == "DELETE":
-        return std_requests.delete(url, headers=headers, timeout=timeout)
-    return std_requests.post(url, json=json_body, headers=headers, timeout=timeout)
+        return cffi_requests.delete(
+            url, headers=headers, impersonate=IMPERSONATE_TARGET, timeout=timeout
+        )
+    return cffi_requests.post(
+        url,
+        json=json_body,
+        headers=headers,
+        impersonate=IMPERSONATE_TARGET,
+        content_callback=content_callback,
+        timeout=timeout,
+    )
 
 
 def delete_conversation(creds, conv_id):

@@ -186,20 +186,24 @@ def _password(info):
     return b"peanuts"  # Linux v10
 
 
+def _openssl_argv(key, iv):
+    return [
+        _tool_path("openssl", *_OPENSSL_CANDIDATES),
+        "enc",
+        "-aes-128-cbc",
+        "-d",
+        "-nopad",
+        "-K",
+        key.hex(),
+        "-iv",
+        iv.hex(),
+    ]
+
+
 def _aes_decrypt(ciphertext, key, iv=b" " * AES_IV_SIZE):
     try:
         p = subprocess.run(
-            [
-                _tool_path("openssl", *_OPENSSL_CANDIDATES),
-                "enc",
-                "-aes-128-cbc",
-                "-d",
-                "-nopad",
-                "-K",
-                key.hex(),
-                "-iv",
-                iv.hex(),
-            ],
+            _openssl_argv(key, iv),
             input=ciphertext,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -215,6 +219,44 @@ def _aes_decrypt(ciphertext, key, iv=b" " * AES_IV_SIZE):
     return p.stdout
 
 
+def _aes_decrypt_many(ciphertexts, key, iv=b" " * AES_IV_SIZE):
+    """Decrypt several ciphertexts in one openssl call (one process, not N).
+
+    Every v10/v11 value is AES-block-aligned, so their concatenation
+    decrypts as one stream and we split the output by input length.
+    Returns None when openssl rejects the batch, so a single malformed
+    value can be retried individually instead of losing the whole profile.
+    """
+    joined = b"".join(ciphertexts)
+    try:
+        p = subprocess.run(
+            _openssl_argv(key, iv),
+            input=joined,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        raise CookieExtractionError(
+            "system 'openssl' not found — required to decrypt Chrome cookies"
+        )
+    if p.returncode != 0 or len(p.stdout) != len(joined):
+        return None
+    out, pos = [], 0
+    for ct in ciphertexts:
+        out.append(p.stdout[pos : pos + len(ct)])
+        pos += len(ct)
+    return out
+
+
+def _decode_cookie(pt, strip_prefix):
+    pad = pt[-1]
+    if 1 <= pad <= AES_BLOCK_SIZE:  # strip PKCS7 padding
+        pt = pt[:-pad]
+    if strip_prefix and len(pt) > 32:
+        pt = pt[32:]
+    return pt.decode("utf-8", "replace")
+
+
 def _decrypt(enc, key, strip_prefix=False):
     """Decrypt one Chrome cookie value (v10/v11 AES-128-CBC).
 
@@ -225,13 +267,21 @@ def _decrypt(enc, key, strip_prefix=False):
         enc = enc.encode("utf-8", "surrogateescape")
     if enc[:3] not in (b"v10", b"v11"):
         return enc.decode("utf-8", "replace")  # legacy plaintext entry
-    pt = _aes_decrypt(enc[3:], key)
-    pad = pt[-1]
-    if 1 <= pad <= AES_BLOCK_SIZE:  # strip PKCS7 padding
-        pt = pt[:-pad]
-    if strip_prefix and len(pt) > 32:
-        pt = pt[32:]
-    return pt.decode("utf-8", "replace")
+    return _decode_cookie(_aes_decrypt(enc[3:], key), strip_prefix)
+
+
+def _decrypt_batch(enc_items, key, strip_prefix):
+    """Decrypt [(name, enc), ...] with one openssl call.
+
+    Raises CookieExtractionError if the batch is rejected — the caller then
+    retries per value so one bad cookie cannot drop the rest of the profile.
+    """
+    plaintexts = _aes_decrypt_many([enc[3:] for _n, enc in enc_items], key)
+    if plaintexts is None:
+        raise CookieExtractionError("openssl batch decryption rejected input")
+    return {
+        name: _decode_cookie(pt, strip_prefix) for (name, _enc), pt in zip(enc_items, plaintexts)
+    }
 
 
 def _read_cookie_rows(db_path):
@@ -288,11 +338,30 @@ def read_claude_cookies(explicit=None):
 
         strip_prefix = version >= CHROME_COOKIE_SCHEMA_VERSION_V24
         cookies = {}
+        enc_items = []  # v10/v11 rows → one openssl call for all of them
         for name, _host, enc, val in rows:
+            # enc[:3] is bytes for BLOBs and str for TEXT; the `in` check
+            # against bytes is False (no error) for TEXT, matching _decrypt.
+            if enc and enc[:3] in (b"v10", b"v11"):
+                enc_items.append((name, enc))
+            elif enc:
+                try:
+                    cookies[name] = _decrypt(enc, key, strip_prefix)
+                except CookieExtractionError as e:
+                    errors.append(f"{info['dir']}: {name}: {e}")
+            else:
+                cookies[name] = val
+        if enc_items:
             try:
-                cookies[name] = _decrypt(enc, key, strip_prefix) if enc else val
-            except CookieExtractionError as e:
-                errors.append(f"{info['dir']}: {name}: {e}")
+                cookies.update(_decrypt_batch(enc_items, key, strip_prefix))
+            except CookieExtractionError:
+                # Batch rejected: retry per value so one malformed cookie
+                # cannot drop a profile that holds the session.
+                for name, enc in enc_items:
+                    try:
+                        cookies[name] = _decrypt(enc, key, strip_prefix)
+                    except CookieExtractionError as e:
+                        errors.append(f"{info['dir']}: {name}: {e}")
         if cookies.get("sessionKey"):
             print(f"[+] Session found: {info['browser']} — {info['dir']}")
             return cookies

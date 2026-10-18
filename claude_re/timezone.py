@@ -38,16 +38,6 @@ def detect_timezone():
     except Exception:
         pass
 
-    # Method 3: try tzlocal (if installed)
-    try:
-        from tzlocal import get_localzone
-
-        tz = str(get_localzone())
-        if tz and "/" in tz:
-            return tz
-    except ImportError:
-        pass
-
     # Method 4: Windows registry
     if sys.platform == "win32":
         try:
@@ -74,15 +64,6 @@ def detect_timezone():
                 return _win_to_iana[tz_name]
         except Exception:
             pass
-
-    # Method 5: /etc/timezone (Linux)
-    try:
-        with open("/etc/timezone") as f:
-            tz = f.read().strip()
-            if tz and "/" in tz:
-                return tz
-    except Exception:
-        pass
 
     print("[!] WARNING: Could not detect system timezone. Falling back to UTC.")
     return "Etc/UTC"

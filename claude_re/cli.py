@@ -7,7 +7,6 @@ import time
 
 from . import http as http_mod
 from .chrome import do_login
-from .compat import HAS_CFFI
 from .config import _CONFIG_DIR, CRED_FILE, SYSTEM_TIMEZONE, resolve_model
 from .creds import CredentialManager
 from .repl import print_help, print_models
@@ -150,7 +149,7 @@ def main():
             session["conv_id"] = None
             session["created"] = False
 
-    lib = "curl_cffi" if HAS_CFFI else "requests"
+    lib = "curl_cffi"
     mode = "stealth" if stealth else "visible"
     print(f"[+] model:   {model}")
     print(f"[+] tz:      {SYSTEM_TIMEZONE}")

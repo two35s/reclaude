@@ -19,6 +19,26 @@ def test_handshake_rejects_non_ws_url():
         CDPConnection._handshake("http://127.0.0.1:9/nothing", timeout=1)
 
 
+def test_recv_text_reassembles_fragmented_frames():
+    # A CDP message split across frames: 0x1 starts (FIN=0), 0x0 continues
+    # (FIN=1). Reading only the first frame would truncate the JSON.
+    part1, part2 = b'{"id":1,', b'"result":{}}'
+    wire = bytes([0x01, len(part1)]) + part1 + bytes([0x80, len(part2)]) + part2
+
+    class _FakeSock:
+        def __init__(self, data):
+            self._data = data
+
+        def recv(self, n):
+            chunk, self._data = self._data[:n], self._data[n:]
+            return chunk
+
+    conn = CDPConnection.__new__(CDPConnection)
+    conn._buf = b""
+    conn._sock = _FakeSock(wire)
+    assert conn._recv_text() == '{"id":1,"result":{}}'
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
 def test_load_tightens_world_readable_creds(tmp_path, monkeypatch):
     f = tmp_path / "claude_session.json"

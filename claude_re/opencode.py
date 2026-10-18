@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 
-from .compat import HAS_CFFI, std_requests
+from .compat import HAS_CFFI
 from .config import DIR, MODEL_ALIASES
 
 NAME = "reclaude"  # MCP server name, provider id, and model prefix
@@ -64,7 +64,7 @@ def provider_block(port=8765):
 
 def install(port=8765):
     """Register the MCP server globally, then print the optional provider config."""
-    if not HAS_CFFI and not std_requests:
+    if not HAS_CFFI:
         print("[!] This Python has no HTTP backend — the server will not start.")
         print("    Re-run inside the venv: source .venv/bin/activate")
     argv = mcp_argv()
