@@ -19,6 +19,34 @@ import uuid
 FENCE_START = "```tool_call"
 FENCE_END = "```"
 
+# The chatgpt.com surface has no tool channel and its chat persona wins against
+# a prompt that reads like pasted instructions: it answers "I can't access that
+# workspace" instead of emitting a fence. Leading with the harness contract (and
+# saying the machine is remote on purpose) makes it emit calls.
+_HARNESS_PROTOCOL = """[Tool protocol]
+You are the model behind OpenCode, a coding harness that owns a remote machine.
+That machine's files and shell are not visible to you directly: the only way to
+read, edit, or run anything is to emit tool calls. The harness runs each call
+and returns the output as a [Tool result] turn in the next request.
+
+Emit a call as a fenced block containing exactly one JSON object:
+
+```tool_call
+{{"name": "<name from the list below>", "arguments": {{<object matching that tool's parameters>}}}}
+```
+
+Rules:
+- To act, emit a tool_call block. Never reply that a workspace, file, or tool is
+  inaccessible; call a tool instead — the harness has access to it.
+- Several calls at once: several separate blocks.
+- Only use tool names listed below.
+- Put any explanation in normal text outside the blocks.
+- After results arrive as [Tool result] turns, continue your work.
+
+[Available tools]
+{specs}
+"""
+
 # Kept next to the parser so the instructed format and the parsed format
 # cannot drift apart. {specs} is filled by render_tool_prompt; JSON braces
 # are doubled because this goes through str.format.
@@ -40,8 +68,12 @@ To call a tool, emit a fenced block containing exactly one JSON object:
 """
 
 
-def render_tool_prompt(tools):
+def render_tool_prompt(tools, harness=False):
     """Render OpenAI ``tools`` into the spec + protocol block for the prompt.
+
+    ``harness`` selects the OpenAI-compatible framing used for chatgpt.com,
+    whose chat surface otherwise refuses to act; the claude backend keeps the
+    plainer block.
 
     Returns "" when no usable tool is present so callers can skip appending.
     """
@@ -60,7 +92,8 @@ def render_tool_prompt(tools):
         )
     if not specs:
         return ""
-    return _PROTOCOL.format(specs="\n".join(specs))
+    template = _HARNESS_PROTOCOL if harness else _PROTOCOL
+    return template.format(specs="\n".join(specs))
 
 
 def _parse_block(body):

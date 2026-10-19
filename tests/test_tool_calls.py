@@ -44,6 +44,30 @@ def test_render_tool_prompt_empty_when_no_usable_tools():
     assert render_tool_prompt([{"type": "function"}]) == ""
 
 
+def test_render_tool_prompt_harness_frames_the_contract():
+    block = render_tool_prompt(TOOLS, harness=True)
+    assert "remote machine" in block  # why the model can't touch files itself
+    assert "inaccessible" in block  # the refusal this exists to prevent
+    assert FENCE_START in block and "read" in block  # same syntax and specs as the plain block
+
+
+def test_chatgpt_prompt_leads_with_tool_protocol_then_instructions():
+    prompt = _openai_messages_to_prompt(
+        [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+        tools=TOOLS,
+        backend="chatgpt",
+    )
+    assert prompt.startswith("[Tool protocol]")
+    assert prompt.index("[Tool protocol]") < prompt.index("[System instructions]:\nbe brief")
+    assert prompt.rstrip().endswith("[User]: hi")
+
+    claude_prompt = _openai_messages_to_prompt(
+        [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}],
+        tools=TOOLS,
+    )
+    assert claude_prompt.startswith("[System instructions]:\nbe brief")
+
+
 def test_parse_single_call_keeps_surrounding_text():
     text = f"Let me check.{FENCE_START}\n{json.dumps({'name': 'read', 'arguments': {'path': '/a'}})}\n{FENCE_END}\nDone."
     plain, calls = parse_tool_calls(text)

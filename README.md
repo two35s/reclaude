@@ -84,7 +84,7 @@ Multi-turn memory works the same way: send an `X-Conversation-Id` header (or Ope
 
 Requests carry a fallback account id in the sentinel headers (`CHATGPT_ACCOUNT_ID_FALLBACK` in `config.py`) for sessions where the auth endpoint doesn't supply one. It was captured from live testing and is unverified for other accounts — if a fresh free account hits unexplained sentinel rejections, start there.
 
-**Tool calling works.** OpenAI `tools` are emulated in text: the proxy appends the tool specs to the prompt, asks the model to emit fenced `tool_call` blocks, and converts them into real OpenAI `tool_calls` in the response. Send the results back as `tool` messages on the next request and the model continues. (Claude.ai's native tool channel keeps the stream open waiting for a result, which deadlocks clients that act only on finished responses — so the proxy doesn't use it.)
+**Tool calling works.** OpenAI `tools` are emulated in text: the proxy appends the tool specs to the prompt, asks the model to emit fenced `tool_call` blocks, and converts them into real OpenAI `tool_calls` in the response. Send the results back as `tool` messages on the next request and the model continues. (Claude.ai's native tool channel keeps the stream open waiting for a result, which deadlocks clients that act only on finished responses — so the proxy doesn't use it.) For the `chatgpt/` backend the protocol block leads the prompt, since that surface otherwise answers "I can't reach that workspace" instead of emitting a fence; a tools-bearing reply that still opens with such a refusal is retried once in a fresh conversation before it is shown.
 
 ### Use as a normal OpenCode model
 

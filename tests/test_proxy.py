@@ -2,7 +2,11 @@
 
 import json
 
-from si.proxy import _openai_messages_to_prompt, _resolve_model_from_openai_id
+from si.proxy import (
+    _looks_like_tool_refusal,
+    _openai_messages_to_prompt,
+    _resolve_model_from_openai_id,
+)
 
 
 def test_system_prepended_and_turns_keep_order():
@@ -123,6 +127,119 @@ def test_stream_response_routes_chatgpt_backend(monkeypatch):
 
     assert seen["creds"] is handler.chatgpt_creds
     assert "hello from chatgpt" in handler.wfile.getvalue().decode()
+
+
+def test_refusal_detection_stays_inside_the_hold_window():
+    assert _looks_like_tool_refusal(
+        "I couldn't execute the requested edit in the OpenCode workspace."
+    )
+    assert _looks_like_tool_refusal("The requested edit tool isn't exposed in this chat's tools.")
+    assert not _looks_like_tool_refusal("I'll update demo.py now.\n\n```tool_call")
+    assert not _looks_like_tool_refusal("Done.")
+    assert not _looks_like_tool_refusal("x" * 300 + " I can't do that")  # past the window
+
+
+def _stub_handler():
+    import io
+
+    import si.proxy as proxy_mod
+
+    handler = object.__new__(proxy_mod._Handler)
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda *a, **k: None
+    handler.send_header = lambda *a, **k: None
+    handler.end_headers = lambda *a, **k: None
+    handler.chatgpt_creds = object()
+    return handler
+
+
+def test_chatgpt_prose_refusal_is_retried_invisibly(monkeypatch):
+    # Regression guard for "chatgpt can't edit on opencode": a prose refusal
+    # on a tool-bearing turn must be replaced by a retry, not shown.
+    import si.chatgpt_stream as chatgpt_mod
+
+    refusal = "I can't reach the OpenCode workspace with the tools available in this session."
+    fence = '```tool_call\n{"name": "read", "arguments": {"path": "demo.py"}}\n```'
+    replies = [refusal, fence]
+    states = []
+
+    def fake_chatgpt(creds, prompt, **kwargs):
+        states.append(kwargs["session_state"])
+        text = replies.pop(0)
+        kwargs["on_text"](text)
+        return text
+
+    monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
+    handler = _stub_handler()
+    handler._stream_response(
+        "hi",
+        "auto",
+        "chatgpt/auto",
+        {"first": True},
+        tools=[{"type": "function", "function": {"name": "read"}}],
+        backend="chatgpt",
+    )
+
+    out = handler.wfile.getvalue().decode()
+    assert "can't" not in out  # the refusal never reached the client
+    assert '"name": "read"' in out and '"tool_calls"' in out
+    assert states == [{"first": True}, {}]  # retry ran in a fresh conversation
+
+
+def test_chatgpt_shows_second_refusal_when_retry_also_refuses(monkeypatch):
+    import si.chatgpt_stream as chatgpt_mod
+
+    first = "I cannot access that workspace."
+    second = "I'm unable to edit files here."
+    replies = [first, second]
+
+    def fake_chatgpt(creds, prompt, **kwargs):
+        text = replies.pop(0)
+        kwargs["on_text"](text)
+        return text
+
+    monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
+    handler = _stub_handler()
+    handler._stream_response(
+        "hi",
+        "auto",
+        "chatgpt/auto",
+        {},
+        tools=[{"type": "function", "function": {"name": "read"}}],
+        backend="chatgpt",
+    )
+
+    out = handler.wfile.getvalue().decode()
+    assert first not in out
+    assert "unable to edit" in out
+
+
+def test_sync_chatgpt_refusal_is_retried(monkeypatch):
+    import si.chatgpt_stream as chatgpt_mod
+
+    replies = [
+        "I couldn't reach the workspace.",
+        '```tool_call\n{"name": "read", "arguments": {"path": "demo.py"}}\n```',
+    ]
+    captured = {}
+
+    def fake_chatgpt(creds, prompt, **kwargs):
+        return replies.pop(0)
+
+    monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
+    handler = _stub_handler()
+    handler._send = lambda code, ctype, body: captured.update(code=code, body=json.loads(body))
+    handler._sync_response(
+        "hi",
+        "auto",
+        "chatgpt/auto",
+        {},
+        tools=[{"type": "function", "function": {"name": "read"}}],
+        backend="chatgpt",
+    )
+
+    message = captured["body"]["choices"][0]["message"]
+    assert message["tool_calls"][0]["function"]["name"] == "read"
 
 
 def test_registry_cap_evicts_oldest_and_keeps_new_key():

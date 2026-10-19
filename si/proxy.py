@@ -44,10 +44,47 @@ from .tool_calls import (
 MAX_BODY_BYTES = 1_000_000
 PROXY_TOKEN = os.environ.get("SI_PROXY_TOKEN", "")
 
+# How much of a chatgpt reply is held back while checking for the prose
+# refusal ("I can't reach that workspace") that surface produces on some
+# tool-bearing turns instead of a fence.  Inside this window nothing has
+# reached the client, so the retry below stays invisible.
+_HOLD_WINDOW_CHARS = 200
+_REFUSAL_MARKERS = (
+    "can't",
+    "can’t",
+    "cannot",
+    "couldn't",
+    "couldn’t",
+    "unable",
+    "inaccessible",
+    "not available",
+    "not accessible",
+    "no access",
+    "don't have",
+    "don’t have",
+    "doesn't have",
+    "doesn’t have",
+    "isn't exposed",
+    "aren't exposed",
+    "not exposed",
+    "returned an error",
+)
+
+
+def _looks_like_tool_refusal(text):
+    """True when a chatgpt reply opens by refusing to act instead of calling.
+
+    Only ever checked on the unforwarded opening of a tools-bearing reply, so
+    a false positive costs one extra upstream turn, never user-visible text.
+    """
+    head = text[:_HOLD_WINDOW_CHARS].lower()
+    return any(marker in head for marker in _REFUSAL_MARKERS)
+
+
 # ── Payload translation ────────────────────────────────────────────────────
 
 
-def _openai_messages_to_prompt(messages, tools=None, recent_only=False):
+def _openai_messages_to_prompt(messages, tools=None, recent_only=False, backend="claude"):
     """Convert OpenAI messages array to a plain text prompt.
 
     We reconstruct a multi-turn context string.  System prompts are
@@ -62,9 +99,10 @@ def _openai_messages_to_prompt(messages, tools=None, recent_only=False):
     so re-sending them would double the token cost every turn.
 
     Tool calls are emulated in text: ``tools`` become a spec + protocol
-    block in the system section, an assistant turn carrying ``tool_calls``
-    is replayed as the same fence syntax it was asked to emit, and ``tool``
-    turns come back as ``[Tool result]`` so the model can continue.
+    block, an assistant turn carrying ``tool_calls`` is replayed as the
+    same fence syntax it was asked to emit, and ``tool`` turns come back
+    as ``[Tool result]`` so the model can continue. For the chatgpt
+    backend the block leads the prompt (see ``_HARNESS_PROTOCOL``).
     """
     parts = []
     system_parts = []
@@ -103,15 +141,25 @@ def _openai_messages_to_prompt(messages, tools=None, recent_only=False):
         elif role == "tool":
             parts.append(f"[Tool result {msg.get('name') or 'tool'}]: {content}")
 
-    tool_block = render_tool_prompt(tools)
+    tool_block = render_tool_prompt(tools, harness=backend == "chatgpt")
+    transcript = "\n\n".join(parts)
+    system_block = "\n".join(system_parts) if system_parts else ""
+
+    if backend == "chatgpt" and tool_block:
+        sections = [tool_block]
+        if system_block:
+            sections.append(f"[System instructions]:\n{system_block}")
+        if transcript:
+            sections.append(transcript)
+        return "\n\n".join(sections)
+
     if tool_block:
         system_parts.append(tool_block)
-
-    prompt = "\n\n".join(parts)
     if system_parts:
         system_block = "\n".join(system_parts)
-        prompt = f"[System instructions]:\n{system_block}\n\n{prompt}"
-    return prompt
+        prompt = f"[System instructions]:\n{system_block}"
+        return f"{prompt}\n\n{transcript}" if transcript else prompt
+    return transcript
 
 
 def _resolve_model_from_openai_id(model_id):
@@ -315,7 +363,9 @@ class _Handler(BaseHTTPRequestHandler):
         # Build flat prompt (tools are described in-text when present).
         # With a persistent conversation the server already remembers
         # earlier turns, so only the recent ones are re-sent.
-        prompt = _openai_messages_to_prompt(messages, tools=tools, recent_only=bool(conv_key))
+        prompt = _openai_messages_to_prompt(
+            messages, tools=tools, recent_only=bool(conv_key), backend=backend
+        )
 
         if conv_key:
             with self.registry_lock:
@@ -372,32 +422,59 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         error_flag = [False]
-        # Tool calls are parsed out of the text stream; only text outside a
-        # fence is forwarded as content, so the client never sees the raw
-        # fence syntax.
-        parser = ToolCallParser() if tools else None
+        stream_fn, backend_creds = self._dispatch(backend)
+        kwargs = {"model": model, "stealth": False}
+        if backend == "claude":
+            kwargs["allow_fallback"] = False  # client owns retries; never swap models silently
+        can_retry = backend == "chatgpt" and bool(tools)
 
-        def on_text(chunk):
+        def forward(text, parser):
+            # Tool calls are parsed out of the text stream; only text outside
+            # a fence is forwarded as content, so the client never sees the
+            # raw fence syntax.
             if parser is not None:
-                chunk = parser.feed(chunk)
-                if not chunk:
+                text = parser.feed(text)
+                if not text:
                     return
             try:
-                self.wfile.write(_sse_chunk(chunk, model_id))
+                self.wfile.write(_sse_chunk(text, model_id))
                 self.wfile.flush()
             except (BrokenPipeError, OSError):
                 error_flag[0] = True
 
-        stream_fn, backend_creds = self._dispatch(backend)
-        kwargs = {
-            "model": model,
-            "stealth": False,
-            "session_state": session_state,
-            "on_text": on_text,
-        }
-        if backend == "claude":
-            kwargs["allow_fallback"] = False  # client owns retries; never swap models silently
-        full = stream_fn(backend_creds, prompt, **kwargs)
+        def run_attempt(state):
+            """One upstream call; returns (full, parser, held_text, live)."""
+            parser = ToolCallParser() if tools else None
+            held, live = [], not can_retry  # without a retry, stream immediately
+
+            def on_text(chunk):
+                nonlocal live
+                if live:
+                    forward(chunk, parser)
+                    return
+                # Hold the opening back so a refusal that triggers the retry
+                # never reaches the client; a fence or a long enough opening
+                # means the model is acting normally.
+                held.append(chunk)
+                head = "".join(held)
+                if _looks_like_tool_refusal(head):
+                    return
+                if "```" in head or len(head) >= _HOLD_WINDOW_CHARS:
+                    live = True
+                    forward(head, parser)
+                    held.clear()
+
+            full = stream_fn(backend_creds, prompt, session_state=state, on_text=on_text, **kwargs)
+            return full, parser, held, live
+
+        full, parser, held, live = run_attempt(session_state)
+        if can_retry and not live and not error_flag[0] and _looks_like_tool_refusal("".join(held)):
+            # The chatgpt surface sometimes answers a tool request in prose
+            # ("I can't reach that workspace") instead of a fence.  Nothing
+            # has reached the client yet, so retry once in a fresh
+            # conversation; if that also refuses, its prose is shown.
+            # shortcut: one retry, no backoff.
+            full, parser, held, live = run_attempt({})
 
         if full is None and not error_flag[0]:
             # Headers are already sent, so surface the failure in-band:
@@ -424,6 +501,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         if not error_flag[0]:
             try:
+                if held:  # short reply, or a refusal we did not retry
+                    forward("".join(held), parser)
                 tool_calls = None
                 finish_reason = "stop"
                 if parser is not None:
@@ -451,18 +530,29 @@ class _Handler(BaseHTTPRequestHandler):
         kwargs = {
             "model": model,
             "stealth": False,
-            "session_state": session_state,
             "on_text": lambda _t: None,  # don't echo the response to the proxy's stdout
         }
         if backend == "claude":
             kwargs["allow_fallback"] = False
-        full = stream_fn(backend_creds, prompt, **kwargs)
+
+        def run_attempt(state):
+            return stream_fn(backend_creds, prompt, session_state=state, **kwargs)
+
+        full = run_attempt(session_state)
         if full is None:
             self._error(502, f"Upstream {backend} API returned no response")
             return
         tool_calls = None
         if tools:
             full, tool_calls = parse_tool_calls(full)
+            if backend == "chatgpt" and not tool_calls and _looks_like_tool_refusal(full):
+                # Prose refusal instead of a tool fence; retry once in a
+                # fresh conversation (same reason as the streaming path).
+                full = run_attempt({})
+                if full is None:
+                    self._error(502, f"Upstream {backend} API returned no response")
+                    return
+                full, tool_calls = parse_tool_calls(full)
         body = json.dumps(_non_stream_response(full, model_id, tool_calls)).encode()
         self._send(200, "application/json", body)
 
