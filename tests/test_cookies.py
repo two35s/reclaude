@@ -1,5 +1,7 @@
 """Cookie extraction: prefix handling, Linux key sources, value plausibility."""
 
+import hashlib
+import sqlite3
 import subprocess
 from unittest import mock
 
@@ -87,3 +89,82 @@ def test_wrong_key_output_is_not_cookie_text():
     assert chrome_cookies._cookie_text("sk-ant-sid01-abc123")
     assert not chrome_cookies._cookie_text("Vr\ufffd\ufffd\x10\x11")
     assert not chrome_cookies._cookie_text("vàlid")  # cookie values are ASCII
+
+
+def _write_cookies_db(profile, rows, version=CHROME_COOKIE_SCHEMA_VERSION_V24):
+    """Create a minimal Chrome Cookies DB (schema >= 24) under a profile dir."""
+    profile.mkdir(parents=True)
+    con = sqlite3.connect(profile / "Cookies")
+    con.execute("CREATE TABLE cookies (name TEXT, host_key TEXT, encrypted_value BLOB, value TEXT)")
+    con.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+    con.execute("INSERT INTO meta VALUES ('version', ?)", (str(version),))
+    con.executemany(
+        "INSERT INTO cookies VALUES (?, '.claude.ai', ?, NULL)",
+        rows,
+    )
+    con.commit()
+    con.close()
+
+
+def test_v11_profile_uses_keyring_secret_end_to_end(tmp_path, monkeypatch):
+    """Reporter's setup: v11 cookies + desktop keyring -> correct values."""
+    monkeypatch.setattr(chrome_cookies.sys, "platform", "linux")
+    monkeypatch.setattr(chrome_cookies, "_keyring_secret", lambda info: b"keyring-secret")
+    profile = tmp_path / "Default"
+    _write_cookies_db(
+        profile,
+        [
+            ("sessionKey", b"v11session"),
+            ("lastActiveOrg", b"v11org"),
+        ],
+    )
+    prefix = b"\x00" * 32  # schema >= 24 prepends SHA256(host_key)
+    plain = {
+        b"session": prefix + b"sk-ant-sid01-abc123",
+        b"org": prefix + b"6f5c1e9a-0000-4000-8000-000000000000",
+    }
+    seen = {}
+
+    def decrypt_many(ciphertexts, key):
+        seen["key"] = key
+        return [plain[ct] for ct in ciphertexts]
+
+    monkeypatch.setattr(chrome_cookies, "_aes_decrypt_many", decrypt_many)
+    cookies = chrome_cookies.read_site_cookies("claude", str(profile))
+    assert cookies == {
+        "sessionKey": "sk-ant-sid01-abc123",
+        "lastActiveOrg": "6f5c1e9a-0000-4000-8000-000000000000",
+    }
+    assert seen["key"] == hashlib.pbkdf2_hmac(
+        "sha1", b"keyring-secret", b"saltysalt", 1, AES_KEY_SIZE
+    )
+
+
+def test_v11_garbage_is_refused_not_returned(tmp_path, monkeypatch):
+    """Wrong-key noise must never become claude_session.json (issue #13)."""
+    monkeypatch.setattr(chrome_cookies.sys, "platform", "linux")
+    monkeypatch.setattr(chrome_cookies, "_keyring_secret", lambda info: b"wrong-secret")
+    profile = tmp_path / "Default"
+    _write_cookies_db(
+        profile,
+        [
+            ("sessionKey", b"v11session"),
+            ("lastActiveOrg", b"v11org"),
+        ],
+    )
+    monkeypatch.setattr(
+        chrome_cookies, "_aes_decrypt_many", lambda cts, key: [b"\x9c\xff" * 40 for _ in cts]
+    )
+    with pytest.raises(chrome_cookies.CookieExtractionError) as exc:
+        chrome_cookies.read_site_cookies("claude", str(profile))
+    assert "did not decrypt to text" in str(exc.value)
+
+
+def test_v11_without_keyring_refuses_with_hint(tmp_path, monkeypatch):
+    monkeypatch.setattr(chrome_cookies.sys, "platform", "linux")
+    monkeypatch.setattr(chrome_cookies, "_keyring_secret", lambda info: None)
+    profile = tmp_path / "Default"
+    _write_cookies_db(profile, [("sessionKey", b"v11session")])
+    with pytest.raises(chrome_cookies.CookieExtractionError) as exc:
+        chrome_cookies.read_site_cookies("claude", str(profile))
+    assert "libsecret-tools" in str(exc.value)
