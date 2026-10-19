@@ -53,9 +53,14 @@ def test_recent_only_false_keeps_full_transcript():
 
 
 def test_model_id_mapping():
-    assert _resolve_model_from_openai_id("reclaude/sonnet") == "claude-sonnet-5-5"
-    assert _resolve_model_from_openai_id("haiku") == "claude-haiku-5-5"
-    assert _resolve_model_from_openai_id("claude-sonnet-4-6") == "claude-sonnet-4-6"
+    assert _resolve_model_from_openai_id("reclaude/sonnet") == ("claude", "claude-sonnet-5-5")
+    assert _resolve_model_from_openai_id("haiku") == ("claude", "claude-haiku-5-5")
+    assert _resolve_model_from_openai_id("claude-sonnet-4-6") == ("claude", "claude-sonnet-4-6")
+
+
+def test_chatgpt_model_id_mapping():
+    assert _resolve_model_from_openai_id("chatgpt/auto") == ("chatgpt", "auto")
+    assert _resolve_model_from_openai_id("chatgpt/gpt-6") == ("chatgpt", "gpt-6")
 
 
 def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
@@ -72,12 +77,52 @@ def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
     handler.end_headers = lambda *a, **k: None
     handler.creds = None
 
-    monkeypatch.setattr(proxy_mod, "stream_prompt", lambda *a, **k: None)
+    monkeypatch.setattr(proxy_mod, "claude_stream_prompt", lambda *a, **k: None)
     handler._stream_response("hi", "claude-sonnet-5-5", "reclaude/sonnet", {})
 
     out = handler.wfile.getvalue().decode()
-    assert '"error"' in out
+    assert "upstream claude error" in out
     assert out.rstrip().endswith("data: [DONE]")
+    # every data frame must be parseable — OpenCode rejects the whole
+    # stream on one malformed frame (issue: "Invalid ... stream event")
+    for line in out.splitlines():
+        if line.startswith("data: ") and line != "data: [DONE]":
+            assert isinstance(json.loads(line[len("data: ") :]), dict)
+
+
+def test_stream_response_routes_chatgpt_backend(monkeypatch):
+    # chatgpt/ models must reach the chatgpt backend, never the claude one.
+    import io
+
+    import claude_re.proxy as proxy_mod
+
+    handler = object.__new__(proxy_mod._Handler)
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda *a, **k: None
+    handler.send_header = lambda *a, **k: None
+    handler.end_headers = lambda *a, **k: None
+    handler.creds = None
+    handler.chatgpt_creds = object()
+
+    seen = {}
+
+    def fake_chatgpt(creds, prompt, **kwargs):
+        seen["creds"] = creds
+        seen["prompt"] = prompt
+        kwargs["on_text"]("hello from chatgpt")
+        return "hello from chatgpt"
+
+    def wrong_backend(*a, **k):
+        raise AssertionError("claude backend must not receive chatgpt/ models")
+
+    import claude_re.chatgpt_stream as chatgpt_mod
+
+    monkeypatch.setattr(proxy_mod, "claude_stream_prompt", wrong_backend)
+    monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
+    handler._stream_response("hi", "auto", "chatgpt/auto", {}, backend="chatgpt")
+
+    assert seen["creds"] is handler.chatgpt_creds
+    assert "hello from chatgpt" in handler.wfile.getvalue().decode()
 
 
 def test_registry_cap_evicts_oldest_and_keeps_new_key():
@@ -95,19 +140,18 @@ def test_registry_cap_evicts_oldest_and_keeps_new_key():
     handler = object.__new__(proxy_mod._Handler)
     handler.headers = {"Content-Length": str(len(body)), "X-Conversation-Id": "new-key"}
     handler.rfile = io.BytesIO(body)
-    handler.session_registry = {f"old-{i}": {} for i in range(256)}
+    handler.session_registry = {("claude", f"old-{i}"): {} for i in range(256)}
     handler.registry_lock = proxy_mod.threading.Lock()
     captured = {}
     # stub out the actual completion call, keep the session_state it received
-    handler._stream_response = lambda prompt, model, model_id, state, tools=None: captured.update(
-        state=state
+    handler._stream_response = lambda prompt, model, model_id, state, tools=None, backend="claude": (
+        captured.update(state=state)
     )
 
     handler._chat_completions()
 
-    assert "old-0" not in handler.session_registry  # oldest evicted
-    assert (
-        "new-key" in handler.session_registry
-        and handler.session_registry["new-key"] is captured["state"]
-    )
+    assert ("claude", "old-0") not in handler.session_registry  # oldest evicted
+    assert ("claude", "new-key") in handler.session_registry and handler.session_registry[
+        ("claude", "new-key")
+    ] is captured["state"]
     assert len(handler.session_registry) == 256

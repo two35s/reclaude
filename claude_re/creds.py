@@ -162,7 +162,7 @@ class CredentialManager:
 
         print("[*] Reading claude.ai session from local Chrome profile...")
         try:
-            cookies = chrome_cookies.read_claude_cookies(profile)
+            cookies = chrome_cookies.read_site_cookies("claude", profile)
         except chrome_cookies.CookieExtractionError as e:
             print(f"[!] {e}")
             return False

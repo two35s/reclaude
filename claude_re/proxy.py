@@ -31,8 +31,8 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .config import DEFAULT_MODEL, MODEL_ALIASES, resolve_model
-from .streaming import stream_prompt
+from .config import CHATGPT_MODELS, DEFAULT_MODEL, MODEL_ALIASES, resolve_model
+from .streaming import stream_prompt as claude_stream_prompt
 from .tool_calls import (
     ToolCallParser,
     parse_tool_calls,
@@ -115,14 +115,14 @@ def _openai_messages_to_prompt(messages, tools=None, recent_only=False):
 
 
 def _resolve_model_from_openai_id(model_id):
-    """Map an incoming OpenAI-style model id to a reclaude model id.
+    """Map an incoming OpenAI-style model id to a (backend, model) pair.
 
-    Clients may send bare aliases ('sonnet', 'haiku'), full ids
-    ('claude-sonnet-5-5'), or prefixed ids ('reclaude/sonnet',
-    'reclaude/claude-sonnet-5-5').
+    The 'chatgpt/' prefix routes to the chatgpt.com backend; everything
+    else (bare aliases, full ids, 'reclaude/...' ids) is claude.ai.
     """
-    model_id = model_id.removeprefix("reclaude/")
-    return resolve_model(model_id)
+    if model_id.startswith("chatgpt/"):
+        return "chatgpt", model_id.removeprefix("chatgpt/")
+    return "claude", resolve_model(model_id.removeprefix("reclaude/"))
 
 
 # ── OpenAI SSE format helpers ──────────────────────────────────────────────
@@ -205,7 +205,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     # Injected by the server factory
     creds = None
-    session_registry: dict[str, dict] = {}  # conversation_id → session_state dict
+    chatgpt_creds = None  # optional second backend; None disables chatgpt/ models
+    session_registry: dict[tuple, dict] = {}  # (backend, conversation_id) → session_state dict
     registry_lock = threading.Lock()
 
     # ── routing ──────────────────────────────────────────────────────
@@ -257,6 +258,16 @@ class _Handler(BaseHTTPRequestHandler):
                 "owned_by": "reclaude",
             }
         )
+        if self.chatgpt_creds is not None:
+            models.extend(
+                {
+                    "id": f"chatgpt/{slug}",
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "openai",
+                }
+                for slug in CHATGPT_MODELS
+            )
         body = json.dumps({"object": "list", "data": models}).encode()
         self._send(200, "application/json", body)
 
@@ -286,7 +297,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         model_id = req.get("model", DEFAULT_MODEL)
-        model = _resolve_model_from_openai_id(model_id)
+        backend, model = _resolve_model_from_openai_id(model_id)
+        if backend == "chatgpt" and self.chatgpt_creds is None:
+            self._error(
+                400,
+                "chatgpt backend not configured — run "
+                "'python -m claude_re --chatgpt --from-chrome' first",
+            )
+            return
         stream = req.get("stream", False)
         tools = req.get("tools") or []
 
@@ -302,23 +320,37 @@ class _Handler(BaseHTTPRequestHandler):
 
         if conv_key:
             with self.registry_lock:
+                # Keyed per backend: a client reusing one conversation key
+                # across reclaude/ and chatgpt/ models must not inherit the
+                # other backend's conversation id.
+                key = (backend, conv_key)
                 # Cap the registry so weeks of proxy uptime don't grow it
                 # forever.  Evicts the oldest conversation (dicts keep
                 # insertion order); the server-side conversation itself
                 # stays until removed by hand in the sidebar.
                 # shortcut: no TTL — only new keys can push an old one out.
-                if conv_key not in self.session_registry and len(self.session_registry) >= 256:
+                if key not in self.session_registry and len(self.session_registry) >= 256:
                     self.session_registry.pop(next(iter(self.session_registry)))
-                session_state = self.session_registry.setdefault(conv_key, {})
+                session_state = self.session_registry.setdefault(key, {})
         else:
             session_state = {}
 
         if stream:
-            self._stream_response(prompt, model, model_id, session_state, tools)
+            self._stream_response(prompt, model, model_id, session_state, tools, backend)
         else:
-            self._sync_response(prompt, model, model_id, session_state, tools)
+            self._sync_response(prompt, model, model_id, session_state, tools, backend)
 
-    def _stream_response(self, prompt, model, model_id, session_state, tools=None):
+    def _dispatch(self, backend):
+        """Return (stream_fn, creds) for the chosen backend."""
+        if backend == "chatgpt":
+            from . import chatgpt_stream
+
+            return chatgpt_stream.stream_prompt, self.chatgpt_creds
+        return claude_stream_prompt, self.creds
+
+    def _stream_response(
+        self, prompt, model, model_id, session_state, tools=None, backend="claude"
+    ):
         """Stream the response as SSE in OpenAI format."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -357,24 +389,34 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, OSError):
                 error_flag[0] = True
 
-        full = stream_prompt(
-            self.creds,
-            prompt,
-            model=model,
-            stealth=False,  # proxy mode — caller manages lifetime
-            session_state=session_state,
-            on_text=on_text,
-            allow_fallback=False,  # the client (OpenCode) owns retries; never swap models silently
-        )
+        stream_fn, backend_creds = self._dispatch(backend)
+        kwargs = {
+            "model": model,
+            "stealth": False,
+            "session_state": session_state,
+            "on_text": on_text,
+        }
+        if backend == "claude":
+            kwargs["allow_fallback"] = False  # client owns retries; never swap models silently
+        full = stream_fn(backend_creds, prompt, **kwargs)
 
         if full is None and not error_flag[0]:
             # Headers are already sent, so surface the failure in-band:
             # an empty 200 with finish_reason "stop" reads as a blank reply.
+            # shortcut: {"error": ...} is not standard OpenAI stream shape;
+            # strict SDKs may reject the frame. Upgrade path: defer the 200
+            # headers until the first token and return a real HTTP error for
+            # pre-text failures.
+            event = json.dumps(
+                {
+                    "error": {
+                        "message": f"upstream {backend} error - see proxy stderr",
+                        "type": "proxy_error",
+                    }
+                }
+            )
             try:
-                self.wfile.write(
-                    b'data: {"error": {"message": "upstream Claude error - see proxy stderr",'
-                    b' "type": "proxy_error"}}\n\n'
-                )
+                self.wfile.write(f"data: {event}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             except (BrokenPipeError, OSError):
@@ -404,19 +446,20 @@ class _Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, OSError):
                 pass
 
-    def _sync_response(self, prompt, model, model_id, session_state, tools=None):
+    def _sync_response(self, prompt, model, model_id, session_state, tools=None, backend="claude"):
         """Collect the full response then return it as one JSON object."""
-        full = stream_prompt(
-            self.creds,
-            prompt,
-            model=model,
-            stealth=False,
-            session_state=session_state,
-            on_text=lambda _t: None,  # don't echo the response to the proxy's stdout
-            allow_fallback=False,
-        )
+        stream_fn, backend_creds = self._dispatch(backend)
+        kwargs = {
+            "model": model,
+            "stealth": False,
+            "session_state": session_state,
+            "on_text": lambda _t: None,  # don't echo the response to the proxy's stdout
+        }
+        if backend == "claude":
+            kwargs["allow_fallback"] = False
+        full = stream_fn(backend_creds, prompt, **kwargs)
         if full is None:
-            self._error(502, "Upstream Claude API returned no response")
+            self._error(502, f"Upstream {backend} API returned no response")
             return
         tool_calls = None
         if tools:
@@ -447,14 +490,17 @@ class _Handler(BaseHTTPRequestHandler):
 # ── Public API ────────────────────────────────────────────────────────────
 
 
-def run_proxy(creds, port=8765):
+def run_proxy(creds, port=8765, chatgpt_creds=None):
     """Start the OpenAI-compatible proxy on the given port.
 
     Blocks until interrupted (Ctrl+C).
     Prints the registration commands for Crush and archived opencode.
+    ``chatgpt_creds`` enables the ``chatgpt/``-prefixed models alongside
+    the claude ones; when None only claude models are served.
     """
     # Inject shared state into the handler class
     _Handler.creds = creds
+    _Handler.chatgpt_creds = chatgpt_creds
     _Handler.session_registry = {}
 
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
@@ -467,6 +513,9 @@ def run_proxy(creds, port=8765):
     print(f'    provider add reclaude --type openai --base-url "http://localhost:{port}/v1"')
     print('    model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000')
     print('    model add reclaude/haiku --name "Claude Haiku (reclaude)" --context-window 200000')
+    if chatgpt_creds is not None:
+        print('\n  ChatGPT models enabled (prefix "chatgpt/", e.g. chatgpt/auto):')
+        print('    model add chatgpt/auto --name "ChatGPT (reclaude)" --context-window 200000')
     print("\n  Or for archived opencode binary:")
     print(f"    LOCAL_ENDPOINT=http://localhost:{port} opencode")
     print("\n  Press Ctrl+C to stop.\n")

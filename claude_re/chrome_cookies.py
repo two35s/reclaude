@@ -1,4 +1,4 @@
-"""Extract claude.ai cookies from a locally installed Chrome profile.
+"""Extract site cookies (claude.ai / chatgpt.com) from a local Chrome profile.
 
 Drop-in alternative to --auto-fetch that reuses an *already logged-in*
 browser instead of launching a fresh profile: it reads the profile's cookie
@@ -11,7 +11,7 @@ Not supported:
   - Windows (cookie values are DPAPI-protected) — use --auto-fetch there.
 
 Decryption uses the system `openssl` binary for AES-128-CBC. No cookies leave
-the machine; only the claude.ai rows are read.
+the machine; only the requested site's rows are read.
 """
 
 import glob
@@ -27,6 +27,7 @@ from .config import (
     AES_BLOCK_SIZE,
     AES_IV_SIZE,
     CHROME_COOKIE_SCHEMA_VERSION_V24,
+    COOKIE_SITES,
     PBKDF2_ITERATIONS_LINUX,
     PBKDF2_ITERATIONS_MAC,
 )
@@ -284,7 +285,7 @@ def _decrypt_batch(enc_items, key, strip_prefix):
     }
 
 
-def _read_cookie_rows(db_path):
+def _read_cookie_rows(db_path, host_patterns):
     """Copy the DB (plus WAL/SHM) so a running Chrome doesn't lock us out.
 
     Returns (rows, schema_version); Chrome >= 130 stores version >= 24 and
@@ -298,9 +299,10 @@ def _read_cookie_rows(db_path):
                 shutil.copy2(src, os.path.join(tmp, "Cookies" + suffix))
         con = sqlite3.connect(os.path.join(tmp, "Cookies"))
         try:
+            where = " OR ".join("host_key LIKE ?" for _ in host_patterns)
             rows = con.execute(
-                "SELECT name, host_key, encrypted_value, value FROM cookies "
-                "WHERE host_key LIKE '%claude.ai%'"
+                f"SELECT name, host_key, encrypted_value, value FROM cookies WHERE {where}",
+                host_patterns,
             ).fetchall()
             try:
                 ver = con.execute("SELECT value FROM meta WHERE key='version'").fetchone()
@@ -314,17 +316,21 @@ def _read_cookie_rows(db_path):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def read_claude_cookies(explicit=None):
-    """Return {cookie_name: value} for claude.ai from a logged-in profile.
+def read_site_cookies(site, explicit=None):
+    """Return {cookie_name: value} for ``site`` (a COOKIE_SITES key) from a
+    logged-in profile.
 
-    Tries each profile in order and returns the first that holds a sessionKey.
-    Raises CookieExtractionError with a reason if none work.
+    Tries each profile in order and returns the first that holds the site's
+    session cookie. Raises CookieExtractionError with a reason if none work.
     """
+    spec = COOKIE_SITES[site]
+    session_cookie = spec["session_cookie"]
+    label = spec["label"]
     errors = []
     for info in list_profiles(explicit):
         db = os.path.join(info["dir"], "Cookies")
         try:
-            rows, version = _read_cookie_rows(db)
+            rows, version = _read_cookie_rows(db, spec["host_patterns"])
         except Exception as e:  # unreadable/corrupt profile — keep trying
             errors.append(f"{db}: {e}")
             continue
@@ -362,12 +368,12 @@ def read_claude_cookies(explicit=None):
                         cookies[name] = _decrypt(enc, key, strip_prefix)
                     except CookieExtractionError as e:
                         errors.append(f"{info['dir']}: {name}: {e}")
-        if cookies.get("sessionKey"):
+        if cookies.get(session_cookie):
             print(f"[+] Session found: {info['browser']} — {info['dir']}")
             return cookies
 
     if errors:
-        raise CookieExtractionError("could not read a claude.ai session:\n  " + "\n  ".join(errors))
+        raise CookieExtractionError(f"could not read a {label} session:\n  " + "\n  ".join(errors))
     raise CookieExtractionError(
-        "no claude.ai sessionKey found — log in to claude.ai in Chrome first"
+        f"no {label} session cookie found — log in to {label} in Chrome first"
     )

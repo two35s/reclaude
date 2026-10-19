@@ -3,7 +3,7 @@
 import sys
 
 from claude_re import opencode
-from claude_re.config import DIR
+from claude_re.config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR
 
 
 def test_mcp_argv_pins_interpreter_and_checkout():
@@ -15,12 +15,20 @@ def test_mcp_argv_pins_interpreter_and_checkout():
     assert argv[argv.index("--") + 1 :] == [sys.executable, "-m", "claude_re.mcp_server"]
 
 
-def test_provider_block_matches_proxy_models():
+def test_provider_block_matches_proxy_models(monkeypatch):
+    # without stored chatgpt creds only the claude models are offered
+    monkeypatch.setattr(opencode.os.path, "exists", lambda _: False)
     block = opencode.provider_block(port=9000)["providers"]["reclaude"]
     assert block["settings"]["baseURL"] == "http://localhost:9000/v1"
     assert block["package"] == "@opencode/ai/providers/openai-compatible"
     assert set(block["models"]) == {"sonnet", "haiku", "opus"}
     assert block["models"]["sonnet"]["modelID"] == "reclaude/sonnet"
+
+    # with stored chatgpt creds the chatgpt model joins the block
+    monkeypatch.setattr(opencode.os.path, "exists", lambda p: p == CHATGPT_CRED_FILE)
+    block = opencode.provider_block(port=9000)["providers"]["reclaude"]
+    assert set(block["models"]) == {"sonnet", "haiku", "opus", "chatgpt"}
+    assert block["models"]["chatgpt"]["modelID"] == f"chatgpt/{CHATGPT_DEFAULT_MODEL}"
 
 
 def test_install_without_opencode_prints_command_and_spawns_nothing(monkeypatch, capsys):

@@ -1,5 +1,6 @@
 # Session credentials (contains session keys, cookies, org IDs)
 claude_session.json
+chatgpt_session.json
 
 # Browser profile (contains session cookies/auth)
 claude_profile/

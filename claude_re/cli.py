@@ -40,6 +40,11 @@ def main():
         help="Extract creds from an already-logged-in Chrome profile",
     )
     ap.add_argument("--manual", action="store_true", help="Manual credential input")
+    ap.add_argument(
+        "--chatgpt",
+        action="store_true",
+        help="With --from-chrome/--manual: store ChatGPT credentials instead of Claude",
+    )
     ap.add_argument("--prompt", type=str, help="Single prompt to send")
     ap.add_argument(
         "--model", type=str, default="sonnet", help="Model: haiku/sonnet/opus (default: sonnet)"
@@ -73,6 +78,11 @@ def main():
 
     # ── Clear session ────────────────────────────────────
     if args.clear_session:
+        if args.chatgpt:
+            from .chatgpt_creds import ChatGPTCredentials
+
+            ChatGPTCredentials().clear()
+            return
         creds = CredentialManager()
         creds.clear()
         return
@@ -83,6 +93,62 @@ def main():
         return
 
     # ── Credential resolution ────────────────────────────
+    # --chatgpt only acquires credentials; the proxy/MCP surfaces read them
+    # from disk, so there is no chatgpt REPL to fall through to.
+    if args.chatgpt:
+        from .chatgpt_creds import ChatGPTCredentials
+
+        cg = ChatGPTCredentials()
+        if args.from_chrome is not None:
+            ok = cg.from_chrome(args.from_chrome or None)
+        elif args.manual:
+            ok = cg.manual_input()
+        elif args.prompt or args.proxy:
+            ok = cg.load()
+            if not ok:
+                print(
+                    "[!] No ChatGPT credentials. Use --chatgpt --from-chrome or --chatgpt --manual"
+                )
+                return
+        else:
+            print("[!] --chatgpt needs an action: --from-chrome, --manual, --proxy, or --prompt")
+            return
+        if not ok:
+            print("[!] ChatGPT credential acquisition failed")
+            return
+        if args.proxy:
+            from .proxy import run_proxy
+
+            creds = CredentialManager()
+            if not creds.load() or not creds.is_valid():
+                print("[!] Proxy needs valid Claude credentials too (claude models are required).")
+                return
+            run_proxy(creds, port=args.port, chatgpt_creds=cg)
+            return
+        if args.prompt:
+            from . import chatgpt_stream
+            from .config import CHATGPT_DEFAULT_MODEL, CHATGPT_MODELS
+
+            # --model defaults to the claude alias "sonnet"; only a real
+            # chatgpt slug the user typed is passed through.
+            model = args.model if args.model in CHATGPT_MODELS else CHATGPT_DEFAULT_MODEL
+            session = {"conv_id": None, "created": False}
+            try:
+                chatgpt_stream.stream_prompt(
+                    cg,
+                    args.prompt,
+                    model=model,
+                    stealth=not args.no_stealth,
+                    session_state=session,
+                )
+            finally:
+                # Cleanup on failure too: the conversation may exist even
+                # when the turn 429'd or was refused.
+                if not args.no_stealth and session.get("created"):
+                    chatgpt_stream.delete_conversation(cg, session["conv_id"])
+            return
+        return
+
     creds = CredentialManager()
 
     if args.auto_fetch:
@@ -131,9 +197,14 @@ def main():
 
     # OpenAI-compatible proxy mode (for Crush / archived opencode integration).
     if args.proxy:
+        # ChatGPT models are served alongside claude ones when stored.
+        from .chatgpt_creds import ChatGPTCredentials
         from .proxy import run_proxy
 
-        run_proxy(creds, port=args.port)
+        cg = ChatGPTCredentials()
+        if not cg.load():
+            cg = None
+        run_proxy(creds, port=args.port, chatgpt_creds=cg)
         return
 
     # Session state: tracks the current conversation for memory

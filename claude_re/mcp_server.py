@@ -1,4 +1,4 @@
-"""Minimal stdlib-only MCP (stdio) server exposing `claude_ask` over reclaude.
+"""Minimal stdlib-only MCP (stdio) server exposing `claude_ask` and `chatgpt_ask`.
 
 Speaks newline-delimited JSON-RPC 2.0 on stdin/stdout, per the Model Context
 Protocol stdio transport. The real stdout is reserved for protocol messages;
@@ -14,7 +14,7 @@ import sys
 import threading
 
 from . import __version__
-from .config import resolve_model
+from .config import CHATGPT_DEFAULT_MODEL, CHATGPT_MODELS, resolve_model
 from .creds import CredentialManager
 from .streaming import stream_prompt
 
@@ -27,11 +27,13 @@ LATEST_PROTOCOL_VERSION = "2025-11-25"
 SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
 
 TOOL_NAME = "claude_ask"
+CHATGPT_TOOL_NAME = "chatgpt_ask"
 DEFAULT_MODEL_ALIAS = "sonnet"
 
-# One backend conversation for the server's whole lifetime (shared memory), and
-# a lock so concurrent calls cannot interleave writes to that state.
+# One backend conversation per provider for the server's whole lifetime
+# (shared memory), and a lock so concurrent calls cannot interleave writes.
 _session = {"conv_id": None, "created": False}
+_chatgpt_session = {"conv_id": None, "created": False}
 _lock = threading.Lock()
 
 
@@ -40,6 +42,18 @@ def _load_creds():
     creds = CredentialManager()
     if not creds.load() or not creds.is_valid():
         raise RuntimeError("No valid Claude.ai credentials. Run: python -m claude_re --auto-fetch")
+    return creds
+
+
+def _load_chatgpt_creds():
+    """Load ChatGPT credentials from disk (no caching, so re-login takes effect)."""
+    from .chatgpt_creds import ChatGPTCredentials
+
+    creds = ChatGPTCredentials()
+    if not creds.load() or not creds.is_valid():
+        raise RuntimeError(
+            "No valid ChatGPT credentials. Run: python -m claude_re --chatgpt --from-chrome"
+        )
     return creds
 
 
@@ -70,6 +84,36 @@ def run_claude(prompt, model):
     return text, None
 
 
+def run_chatgpt(prompt, model):
+    """Call the ChatGPT backend. Returns (text, None) or (None, error_message)."""
+    from . import chatgpt_stream
+
+    try:
+        creds = _load_chatgpt_creds()
+    except RuntimeError as e:
+        return None, str(e)
+    if model not in CHATGPT_MODELS:
+        return None, f"Unknown ChatGPT model {model!r}. Available: {', '.join(CHATGPT_MODELS)}"
+    with _lock:  # serialize: the shared conversation state is not reentrant
+        try:
+            text = chatgpt_stream.stream_prompt(
+                creds,
+                prompt,
+                model=model,
+                stealth=False,
+                session_state=_chatgpt_session,
+                on_text=lambda _t: None,  # suppress live echo; result is returned below
+            )
+        except Exception as e:
+            return None, f"backend error: {e}"
+    if text is None:
+        return None, (
+            "No response from ChatGPT (expired session, rate limit, or turn "
+            "refused). See the MCP server's stderr for the reason."
+        )
+    return text, None
+
+
 # ── JSON-RPC / MCP shaping ──────────────────────────────────────────────────
 
 
@@ -85,25 +129,21 @@ def _tool_text(mid, text, is_error=False):
     return _result(mid, {"content": [{"type": "text", "text": text}], "isError": is_error})
 
 
-def _tool_schema():
+def _tool_schema(name, description, prompt_description, model_description, default_model):
     return {
-        "name": TOOL_NAME,
-        "description": (
-            "Ask Claude.ai (through the local reclaude browser session) a question "
-            "and return its text reply. Use it for a second opinion or when the user "
-            "asks for Claude specifically."
-        ),
+        "name": name,
+        "description": description,
         "inputSchema": {
             "type": "object",
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "The question or instruction to send to Claude.ai.",
+                    "description": prompt_description,
                 },
                 "model": {
                     "type": "string",
-                    "description": "Model alias (sonnet, haiku, opus) or full model id.",
-                    "default": DEFAULT_MODEL_ALIAS,
+                    "description": model_description,
+                    "default": default_model,
                 },
             },
             "required": ["prompt"],
@@ -112,9 +152,38 @@ def _tool_schema():
     }
 
 
-def _handle_tools_call(mid, params, ask):
-    if params.get("name") != TOOL_NAME:
-        return _error(mid, -32602, f"Unknown tool: {params.get('name')!r}")
+def _claude_schema():
+    return _tool_schema(
+        TOOL_NAME,
+        "Ask Claude.ai (through the local reclaude browser session) a question "
+        "and return its text reply. Use it for a second opinion or when the user "
+        "asks for Claude specifically.",
+        "The question or instruction to send to Claude.ai.",
+        "Model alias (sonnet, haiku, opus) or full model id.",
+        DEFAULT_MODEL_ALIAS,
+    )
+
+
+def _chatgpt_schema():
+    return _tool_schema(
+        CHATGPT_TOOL_NAME,
+        "Ask ChatGPT (through the local reclaude browser session) a question "
+        "and return its text reply. Use it for a second opinion or when the "
+        "user asks for ChatGPT specifically.",
+        "The question or instruction to send to ChatGPT.",
+        f"ChatGPT model slug. Available: {', '.join(CHATGPT_MODELS)}.",
+        CHATGPT_DEFAULT_MODEL,
+    )
+
+
+def _handle_tools_call(mid, params, ask, ask_chatgpt=run_chatgpt):
+    name = params.get("name")
+    if name == CHATGPT_TOOL_NAME:
+        runner, default_model = ask_chatgpt, CHATGPT_DEFAULT_MODEL
+    elif name == TOOL_NAME:
+        runner, default_model = ask, DEFAULT_MODEL_ALIAS
+    else:
+        return _error(mid, -32602, f"Unknown tool: {name!r}")
     args = params.get("arguments")
     if args is None:
         args = {}
@@ -124,17 +193,17 @@ def _handle_tools_call(mid, params, ask):
     prompt = args.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         return _tool_text(mid, "Invalid input: 'prompt' must be a non-empty string.", True)
-    model = args.get("model", DEFAULT_MODEL_ALIAS)
+    model = args.get("model", default_model)
     if not isinstance(model, str) or not model.strip():
         return _tool_text(mid, "Invalid input: 'model' must be a non-empty string.", True)
 
-    text, error = ask(prompt, model)
+    text, error = runner(prompt, model)
     if error is not None:
         return _tool_text(mid, error, True)
     return _tool_text(mid, text)
 
 
-def handle_message(msg, ask=run_claude):
+def handle_message(msg, ask=run_claude, ask_chatgpt=run_chatgpt):
     """Handle one decoded JSON-RPC message.
 
     Returns a response dict, or None for notifications / messages needing no reply.
@@ -162,12 +231,12 @@ def handle_message(msg, ask=run_claude):
     if method == "ping":
         return _result(mid, {})
     if method == "tools/list":
-        return _result(mid, {"tools": [_tool_schema()]})
+        return _result(mid, {"tools": [_claude_schema(), _chatgpt_schema()]})
     if method == "tools/call":
         params = msg.get("params")
         if not isinstance(params, dict):
             return _error(mid, -32602, "Invalid params")
-        return _handle_tools_call(mid, params, ask)
+        return _handle_tools_call(mid, params, ask, ask_chatgpt)
 
     if mid is None:
         return None  # unknown notification: ignore
@@ -182,12 +251,12 @@ def _write(obj, out):
     out.flush()
 
 
-def serve(instream, outstream, ask=run_claude):
+def serve(instream, outstream, ask=run_claude, ask_chatgpt=run_chatgpt):
     """Read newline-delimited JSON-RPC from ``instream``, write replies to ``outstream``.
 
     sys.stdout is redirected to stderr for the duration so reclaude's own prints
     never reach the protocol stream. Requests are handled sequentially, which
-    (with the lock in ``run_claude``) also keeps the shared conversation safe.
+    (with the lock in the runners) also keeps the shared conversations safe.
     """
     real_stdout = sys.stdout
     sys.stdout = sys.stderr
@@ -201,7 +270,7 @@ def serve(instream, outstream, ask=run_claude):
             except json.JSONDecodeError:
                 _write(_error(None, -32700, "Parse error"), outstream)
                 continue
-            response = handle_message(msg, ask)
+            response = handle_message(msg, ask, ask_chatgpt)
             if response is not None:
                 _write(response, outstream)
     finally:

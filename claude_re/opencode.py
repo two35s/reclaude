@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 from .compat import HAS_CFFI
-from .config import DIR, MODEL_ALIASES
+from .config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR, MODEL_ALIASES
 
 NAME = "reclaude"  # MCP server name, provider id, and model prefix
 PICKER_MODELS = ("sonnet", "haiku", "opus")
@@ -46,17 +46,24 @@ def global_config_path():
 
 
 def provider_block(port=8765):
-    """The `providers` entry that exposes the running proxy as OpenCode models."""
+    """The `providers` entry that exposes the running proxy as OpenCode models.
+
+    The ChatGPT model is included only when chatgpt credentials are stored,
+    since the proxy rejects ``chatgpt/`` requests without them.
+    """
+    models = {
+        alias: {"name": f"Claude {alias.capitalize()}", "modelID": f"{NAME}/{alias}"}
+        for alias in PICKER_MODELS
+    }
+    if os.path.exists(CHATGPT_CRED_FILE):
+        models["chatgpt"] = {"name": "ChatGPT", "modelID": f"chatgpt/{CHATGPT_DEFAULT_MODEL}"}
     return {
         "providers": {
             NAME: {
                 "name": NAME,
                 "package": "@opencode/ai/providers/openai-compatible",
                 "settings": {"baseURL": f"http://localhost:{port}/v1"},
-                "models": {
-                    alias: {"name": f"Claude {alias.capitalize()}", "modelID": f"{NAME}/{alias}"}
-                    for alias in PICKER_MODELS
-                },
+                "models": models,
             }
         }
     }

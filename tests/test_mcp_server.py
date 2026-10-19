@@ -58,13 +58,18 @@ def test_ping_returns_empty_result():
 # ── discovery ───────────────────────────────────────────────────────────────
 
 
-def test_tools_list_exposes_schema():
+def test_tools_list_exposes_both_schemas():
     resp = handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     tools = resp["result"]["tools"]
-    assert [t["name"] for t in tools] == ["claude_ask"]
-    schema = tools[0]["inputSchema"]
-    assert schema["required"] == ["prompt"]
-    assert schema["properties"]["model"]["default"] == "sonnet"
+    assert [t["name"] for t in tools] == ["claude_ask", "chatgpt_ask"]
+    claude_schema, chatgpt_schema = tools
+    assert claude_schema["inputSchema"]["required"] == ["prompt"]
+    assert claude_schema["inputSchema"]["properties"]["model"]["default"] == "sonnet"
+    assert chatgpt_schema["inputSchema"]["required"] == ["prompt"]
+    assert (
+        chatgpt_schema["inputSchema"]["properties"]["model"]["default"]
+        == mcp_server.CHATGPT_DEFAULT_MODEL
+    )
 
 
 # ── tools/call ──────────────────────────────────────────────────────────────
@@ -108,6 +113,38 @@ def test_tools_call_bad_model_type_is_invalid():
 def test_tools_call_unknown_tool_is_protocol_error():
     resp = handle_message(_call(8, {"prompt": "hi"}, name="nope"))
     assert resp["error"]["code"] == -32602
+
+
+def test_chatgpt_ask_dispatches_to_chatgpt_backend():
+    seen = {}
+
+    def ask_chatgpt(prompt, model):
+        seen.update(prompt=prompt, model=model)
+        return "cg reply", None
+
+    resp = handle_message(
+        _call(10, {"prompt": "hi"}, name="chatgpt_ask"),
+        ask=_ask_ok("never"),
+        ask_chatgpt=ask_chatgpt,
+    )
+    assert resp["result"]["isError"] is False
+    assert resp["result"]["content"][0]["text"] == "cg reply"
+    assert seen == {"prompt": "hi", "model": mcp_server.CHATGPT_DEFAULT_MODEL}
+
+
+def test_chatgpt_ask_uses_caller_model():
+    seen = {}
+
+    def ask_chatgpt(prompt, model):
+        seen["model"] = model
+        return "ok", None
+
+    handle_message(
+        _call(11, {"prompt": "p", "model": "gpt-6"}, name="chatgpt_ask"),
+        ask=_ask_ok("never"),
+        ask_chatgpt=ask_chatgpt,
+    )
+    assert seen["model"] == "gpt-6"
 
 
 def test_unknown_method_is_error():
