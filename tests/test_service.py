@@ -41,3 +41,18 @@ def test_health_check_sends_the_proxy_token(monkeypatch):
     monkeypatch.setattr(service.urllib.request, "urlopen", fake_urlopen)
     assert service._healthy(8765) is True
     assert seen["auth"] == "Bearer secret"
+
+
+def test_install_writes_a_private_plist(tmp_path, monkeypatch):
+    import subprocess
+
+    plist = tmp_path / "com.si.proxy.plist"
+    monkeypatch.setattr(service, "PLIST_PATH", str(plist))
+    monkeypatch.setattr(service, "LOG_PATH", str(tmp_path / "si-proxy.log"))
+    monkeypatch.setattr(service.sys, "platform", "darwin")
+    monkeypatch.setattr(service, "_port_in_use", lambda port: False)
+    monkeypatch.setattr(service, "_healthy", lambda port: True)
+    monkeypatch.setattr(service, "_launchctl", lambda *a: subprocess.CompletedProcess(a, 0, "", ""))
+
+    assert service.install(8765) is True
+    assert (plist.stat().st_mode & 0o777) == 0o600

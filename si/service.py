@@ -78,10 +78,13 @@ def install(port=8765):
 
     os.makedirs(os.path.dirname(PLIST_PATH), exist_ok=True)
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
-    with open(PLIST_PATH, "wb") as f:
+    # The plist may embed SI_PROXY_TOKEN: create it user-only from the start
+    # instead of relying on the chmod after the write.
+    fd = os.open(PLIST_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
         plistlib.dump(_plist(port), f)
     if os.name != "nt":
-        os.chmod(PLIST_PATH, 0o600)  # the plist may embed SI_PROXY_TOKEN
+        os.chmod(PLIST_PATH, 0o600)
     result = _launchctl("load", "-w", PLIST_PATH)
     if result.returncode != 0:
         print(f"[!] launchctl load failed: {(result.stderr or result.stdout).strip()}")
