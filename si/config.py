@@ -93,11 +93,11 @@ CHATGPT_UA = (
 CHATGPT_IMPERSONATE = "chrome150"
 # Last-resort account id: the session endpoint normally supplies it, but the
 # sentinel headers require the header to be present even on anonymous plans.
-# shortcut: the author's own account id, checked in from live testing; the
-# sentinel appears to check presence, not ownership, but that is unverified
-# for any other account. Upgrade path: parse the id from the session JWT, or
-# capture a sentinel request from an anonymous account.
-CHATGPT_ACCOUNT_ID_FALLBACK = "00000000-0000-0000-0000-000000000000"
+# Set SI_CHATGPT_ACCOUNT_ID to your own; empty is accepted by the sentinel in
+# practice (it appears to check presence, not ownership), but that is
+# unverified for every account. Upgrade path: parse the id from the session
+# JWT, or capture a sentinel request from an anonymous account.
+CHATGPT_ACCOUNT_ID_FALLBACK = os.environ.get("SI_CHATGPT_ACCOUNT_ID", "")
 CHATGPT_DEFAULT_MODEL = "auto"
 # Models chatgpt.com's own selector advertises, in the order it lists them.
 CHATGPT_MODELS = (
