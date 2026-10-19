@@ -29,6 +29,8 @@ python -m si --manual        # or: paste org_id + Cookie header by hand
 
 Saves to `~/.config/si/claude_session.json` (`600`).
 
+On Linux, cookies Chrome encrypted with the desktop keyring (`v11`) need `libsecret-tools` installed and the keyring unlocked; without them `--from-chrome` refuses the profile instead of saving garbage (use `--auto-fetch` as the fallback).
+
 ### ChatGPT credentials
 
 ```bash

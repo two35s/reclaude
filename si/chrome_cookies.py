@@ -6,7 +6,9 @@ database and decrypts it with the browser's OS-level key.
 
 Supported:
   - macOS Chrome / Chromium / Brave / Edge   (v10, AES-128-CBC, Keychain key)
-  - Linux Chrome / Chromium (v10, "peanuts" key)
+  - Linux Chrome / Chromium / Brave (v10 "peanuts" key; v11 with the keyring
+    "Safe Storage" secret via secret-tool — needs libsecret-tools installed
+    and the keyring unlocked)
 Not supported:
   - Windows (cookie values are DPAPI-protected) — use --auto-fetch there.
 
@@ -60,9 +62,27 @@ _MAC_BROWSERS = {
     ),
 }
 _LINUX_BROWSERS = {
-    "Chrome": ("~/.config/google-chrome", None, None, PBKDF2_ITERATIONS_LINUX),
-    "Chromium": ("~/.config/chromium", None, None, PBKDF2_ITERATIONS_LINUX),
-    "Brave": ("~/.config/BraveSoftware/Brave-Browser", None, None, PBKDF2_ITERATIONS_LINUX),
+    "Chrome": ("~/.config/google-chrome", "Chrome Safe Storage", "Chrome", PBKDF2_ITERATIONS_LINUX),
+    "Chromium": (
+        "~/.config/chromium",
+        "Chromium Safe Storage",
+        "Chromium",
+        PBKDF2_ITERATIONS_LINUX,
+    ),
+    "Brave": (
+        "~/.config/BraveSoftware/Brave-Browser",
+        "Brave Safe Storage",
+        "Brave",
+        PBKDF2_ITERATIONS_LINUX,
+    ),
+}
+# libsecret `application` attribute (schema chrome_libsecret_os_crypt_password_v2):
+# newer distros store the "Safe Storage" secret under this instead of service/account.
+_KEYRING_APPLICATIONS = {
+    "Chrome": "chrome",
+    "Chromium": "chromium",
+    "Brave": "brave",
+    "Edge": "msedge",
 }
 
 
@@ -185,6 +205,52 @@ def _password(info):
             )
         return out.stdout.rstrip("\n").encode()
     return b"peanuts"  # Linux v10
+
+
+def _keyring_secret(info):
+    """Read the browser's keyring "Safe Storage" secret (Linux v11 cookies).
+
+    libsecret schemas differ across versions and distros: try the classic
+    service/account pair, then the v2 schema's `application` attribute.
+    Returns None when secret-tool is missing, the keyring is locked, or no
+    entry matches — the caller then reports the affected cookies.
+    """
+    tool = shutil.which("secret-tool")
+    if not tool:
+        return None
+    lookups = []
+    if info["service"]:
+        lookups.append(["service", info["service"], "account", info["account"]])
+    app = _KEYRING_APPLICATIONS.get(info["browser"])
+    if app:
+        lookups.append(["application", app])
+    for attrs in lookups:
+        try:
+            p = subprocess.run(
+                [tool, "lookup", *attrs],
+                capture_output=True,
+                text=True,
+                timeout=120,  # may wait for the keyring unlock dialog
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if p.returncode == 0 and p.stdout.strip():
+            return p.stdout.strip().encode()
+    return None
+
+
+def _secret_for(info, prefix):
+    """Key-minting secret for a stored cookie value, or None if unavailable.
+
+    macOS only writes v10 (Keychain secret). Linux v10 uses the hard-coded
+    "peanuts" key; v11 values were encrypted with the keyring secret and
+    only decrypt with it.
+    """
+    if sys.platform == "darwin":
+        return _password(info)
+    if prefix == b"v11":
+        return _keyring_secret(info)
+    return b"peanuts"
 
 
 def _openssl_argv(key, iv):
@@ -316,6 +382,15 @@ def _read_cookie_rows(db_path, host_patterns):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _cookie_text(value):
+    """True when a decrypted value looks like a cookie value, not key-noise.
+
+    Chrome cookie values are printable ASCII; decrypting with the wrong key
+    yields bytes that decode to controls or replacement characters.
+    """
+    return value.isascii() and value.isprintable()
+
+
 def read_site_cookies(site, explicit=None):
     """Return {cookie_name: value} for ``site`` (a COOKIE_SITES key) from a
     logged-in profile.
@@ -336,38 +411,53 @@ def read_site_cookies(site, explicit=None):
             continue
         if not rows:
             continue
-        try:
-            key = hashlib.pbkdf2_hmac("sha1", _password(info), b"saltysalt", info["iterations"], 16)
-        except CookieExtractionError as e:
-            errors.append(f"{info['dir']}: {e}")
-            continue
-
         strip_prefix = version >= CHROME_COOKIE_SCHEMA_VERSION_V24
         cookies = {}
-        enc_items = []  # v10/v11 rows → one openssl call for all of them
+        buckets = {}  # value prefix → rows; v10 and v11 need different keys
         for name, _host, enc, val in rows:
-            # enc[:3] is bytes for BLOBs and str for TEXT; the `in` check
-            # against bytes is False (no error) for TEXT, matching _decrypt.
+            if enc and isinstance(enc, str):
+                enc = enc.encode("utf-8", "surrogateescape")
             if enc and enc[:3] in (b"v10", b"v11"):
-                enc_items.append((name, enc))
+                buckets.setdefault(enc[:3], []).append((name, enc))
             elif enc:
-                try:
-                    cookies[name] = _decrypt(enc, key, strip_prefix)
-                except CookieExtractionError as e:
-                    errors.append(f"{info['dir']}: {name}: {e}")
+                cookies[name] = enc.decode("utf-8", "replace")  # legacy plaintext
             else:
                 cookies[name] = val
-        if enc_items:
+        for prefix, items in buckets.items():
             try:
-                cookies.update(_decrypt_batch(enc_items, key, strip_prefix))
+                secret = _secret_for(info, prefix)
+            except CookieExtractionError as e:
+                errors.append(f"{info['dir']}: {e}")
+                continue
+            if secret is None:
+                errors.append(
+                    f"{info['dir']}: {len(items)} {prefix.decode()} cookie(s) need the keyring "
+                    "'Safe Storage' secret — install libsecret-tools and unlock the keyring, "
+                    "or use --auto-fetch"
+                )
+                continue
+            key = hashlib.pbkdf2_hmac("sha1", secret, b"saltysalt", info["iterations"], 16)
+            try:
+                cookies.update(_decrypt_batch(items, key, strip_prefix))
             except CookieExtractionError:
                 # Batch rejected: retry per value so one malformed cookie
                 # cannot drop a profile that holds the session.
-                for name, enc in enc_items:
+                for name, enc in items:
                     try:
                         cookies[name] = _decrypt(enc, key, strip_prefix)
                     except CookieExtractionError as e:
                         errors.append(f"{info['dir']}: {name}: {e}")
+        # Wrong key / unknown scheme decrypts to non-text: never save or use that.
+        garbled = sorted(
+            n for n, v in cookies.items() if not (isinstance(v, str) and _cookie_text(v))
+        )
+        for name in garbled:
+            cookies.pop(name)
+        if garbled:
+            print(f"[!] Skipping {len(garbled)} cookie(s) that did not decrypt to text")
+            errors.append(
+                f"{info['dir']}: cookie(s) did not decrypt to text: {', '.join(garbled[:5])}"
+            )
         if cookies.get(session_cookie):
             print(f"[+] Session found: {info['browser']} — {info['dir']}")
             return cookies
