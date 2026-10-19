@@ -28,12 +28,11 @@ import threading
 import time
 import uuid
 
-from .compat import HAS_CFFI, cffi_requests
+from .compat import cffi_requests
 from .config import (
     _CONFIG_DIR,
     CHATGPT_DEFAULT_MODEL,
     CHATGPT_IMPERSONATE,
-    CHATGPT_TURNSTILE_FALLBACK,
     CHATGPT_URL_BASE,
     POW_MAX_NONCE,
 )
@@ -144,12 +143,13 @@ def _get_session():
     global _CHATGPT_SESSION
     if _CHATGPT_SESSION is not None:
         return _CHATGPT_SESSION
-    if not HAS_CFFI or cffi_requests is None:
-        return None
     with _SESSION_LOCK:  # same double-check as http.get_session
         if _CHATGPT_SESSION is not None:
             return _CHATGPT_SESSION
-        _CHATGPT_SESSION = cffi_requests.Session(impersonate=CHATGPT_IMPERSONATE)
+        try:
+            _CHATGPT_SESSION = cffi_requests.Session(impersonate=CHATGPT_IMPERSONATE)
+        except Exception:
+            return None
         return _CHATGPT_SESSION
 
 
@@ -157,19 +157,25 @@ _CHATGPT_SESSION = None
 _SESSION_LOCK = threading.Lock()
 
 
+def _headers(creds):
+    """Session headers plus the current bearer token, when available."""
+    hdrs = dict(creds.make_headers())
+    auth = creds.auth_headers()
+    if auth:
+        hdrs.update(auth)
+    return hdrs
+
+
 def _post(creds, path, payload, headers=None, timeout=30, content_callback=None):
     """POST one chatgpt.com API call, refreshing the accessToken on 401.
 
     Returns the response, or None when the request could not be made at all.
     """
-    hdrs = dict(creds.make_headers())
-    auth = creds.auth_headers()
-    if auth:
-        hdrs.update(auth)
+    hdrs = _headers(creds)
     if headers:
         hdrs.update(headers)
 
-    def send(token_headers):
+    def send(token_headers=None):
         h = dict(hdrs)
         h.update(token_headers or {})
         sess = _get_session()
@@ -191,7 +197,7 @@ def _post(creds, path, payload, headers=None, timeout=30, content_callback=None)
         )
 
     try:
-        resp = send(auth)
+        resp = send()
     except Exception as e:
         print(f"\n[!] ChatGPT request error ({path}): {e}")
         return None
@@ -204,26 +210,19 @@ def _post(creds, path, payload, headers=None, timeout=30, content_callback=None)
     return resp
 
 
-def _get(creds, path, timeout=30):
-    hdrs = dict(creds.make_headers())
-    auth = creds.auth_headers()
-    if auth:
-        hdrs.update(auth)
-    sess = _get_session()
-    try:
-        if sess is not None:
-            return sess.get(f"{CHATGPT_URL_BASE}{path}", headers=hdrs, timeout=timeout)
-        return cffi_requests.get(
-            f"{CHATGPT_URL_BASE}{path}",
-            headers=hdrs,
-            impersonate=CHATGPT_IMPERSONATE,
-            timeout=timeout,
-        )
-    except Exception:
-        return None
-
-
 # ── Sentinel handshake ──────────────────────────────────────────────────────
+
+
+def _turnstile_fallback():
+    """Captured Turnstile token, kept out of the repo as session data."""
+    token = os.environ.get("SI_CHATGPT_TURNSTILE", "").strip()
+    if token:
+        return token
+    try:
+        with open(os.path.join(_CONFIG_DIR, "chatgpt_turnstile.txt")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
 
 def acquire_sentinel_tokens(creds):
@@ -255,7 +254,13 @@ def acquire_sentinel_tokens(creds):
         print("\n[!] Could not solve the ChatGPT proof-of-work challenge.")
         return None
 
-    turnstile = (prep.get("turnstile") or {}).get("token") or CHATGPT_TURNSTILE_FALLBACK
+    turnstile = (prep.get("turnstile") or {}).get("token") or _turnstile_fallback()
+    if not turnstile:
+        print(
+            "\n[!] ChatGPT sentinel returned no Turnstile token; "
+            "set SI_CHATGPT_TURNSTILE or re-capture one."
+        )
+        return None
     fin = {
         "prepare_token": prep.get("prepare_token"),
         "proofofwork": answer,
@@ -325,10 +330,7 @@ def delete_conversation(creds, conv_id):
     fingerprint matches the chatgpt.com headers the edge checks see.
     """
     url = f"{CHATGPT_URL_BASE}/backend-api/conversation/{conv_id}"
-    hdrs = dict(creds.make_headers())
-    auth = creds.auth_headers()
-    if auth:
-        hdrs.update(auth)
+    hdrs = _headers(creds)
     try:
         sess = _get_session()
         if sess is not None:
@@ -543,6 +545,7 @@ def stream_prompt(
             event, text = text.split("\n\n", 1)
             tail[0] = text.encode("utf-8", "replace")
             if _consume_event(event, parts, emit, state):
+                state["done"] = True
                 tail[0] = b""  # turn over; drop anything that follows
                 return
 
@@ -555,7 +558,10 @@ def stream_prompt(
         content_callback=on_chunk,
     )
 
-    if resp is not None and resp.status_code != 200 and not parts:
+    if resp is None:
+        print("\n[!] ChatGPT request failed before completion.")
+        return None
+    if resp.status_code != 200:
         status = resp.status_code
         try:
             body = (resp.text or "")[:300]
@@ -569,11 +575,22 @@ def stream_prompt(
             print(f"\n[!] ChatGPT error (HTTP {status}): {body}")
         return None
 
+    if state.get("error"):
+        print(f"\n[!] ChatGPT refused the turn: {state['error']}")
+        return None
+    # A terminal event is the normal end. A terminal successful snapshot also
+    # counts after EOF: some surfaces close without message_stream_complete.
+    if not state.get("done") and state.get("status") != "finished_successfully":
+        status = state.get("status")
+        if status and status != "in_progress":
+            print(f"\n[!] ChatGPT turn ended as {status}")
+        else:
+            print("\n[!] ChatGPT stream ended before completion; discarding the partial reply.")
+        return None
+
     full = "".join(parts)
     if not full:
-        if state.get("error"):
-            print(f"\n[!] ChatGPT refused the turn: {state['error']}")
-        elif state.get("status") and state["status"] != "finished_successfully":
+        if state.get("status") and state["status"] != "finished_successfully":
             print(f"\n[!] ChatGPT turn ended as {state['status']}")
         else:
             print("\n[!] ChatGPT returned no text.")

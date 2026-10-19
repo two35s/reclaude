@@ -115,3 +115,17 @@ def test_slash_completion_filters_and_tab_picks(app):
     app.cmd_sel = 3
     app.key(9)
     assert app.buf == "/help "
+
+
+def test_worker_shows_the_backend_failure_reason(app, monkeypatch):
+    import si.tui as tui_mod
+
+    def failed(*a, **k):
+        print("\n[!] Session expired. Run --auto-fetch")
+        return None
+
+    monkeypatch.setattr(tui_mod, "stream_prompt", failed)
+    app._worker(["assistant", ""], "hi")
+    kind, note = app.queue.get(timeout=1)
+    assert kind == "note"
+    assert "Session expired" in note

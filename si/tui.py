@@ -21,24 +21,15 @@ from .streaming import stream_prompt
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+# (display name, help text, canonical command); _command accepts unique prefixes.
 COMMANDS = [
-    ("/new", "new conversation"),
-    ("/model", "switch model"),
-    ("/models", "list models"),
-    ("/help", "this list"),
-    ("/quit", "exit"),
+    ("/new", "new conversation", "new"),
+    ("/model", "switch model", "model"),
+    ("/models", "list models", "models"),
+    ("/help", "this list", "help"),
+    ("/quit", "exit", "quit"),
 ]
-
-# Canonical slash commands (aliases included); _command accepts unique prefixes.
-_COMMANDS = {
-    "new": "new",
-    "model": "model",
-    "models": "models",
-    "help": "help",
-    "quit": "quit",
-    "exit": "quit",
-    "q": "quit",
-}
+_COMMANDS = {name[1:]: cmd for name, _desc, cmd in COMMANDS} | {"exit": "quit", "q": "quit"}
 
 
 def match_command(frag):
@@ -138,6 +129,8 @@ class App:
         self.cmd_sel = 0
         self._cmd_buf = None
         self.cursor = None  # (y, x) set by _input, applied after all drawing
+        self._wrap_cache = {}  # (role, text) -> wrapped lines at _wrap_width
+        self._wrap_width = None
 
     # ── sending ──────────────────────────────────────────────
     def send(self):
@@ -159,7 +152,7 @@ class App:
         if self.buf != self._cmd_buf:
             self._cmd_buf, self.cmd_sel = self.buf, 0
         frag = self.buf[1:].lower()
-        return [(c, d) for c, d in COMMANDS if c[1:].startswith(frag)]
+        return [(c, d) for c, d, _cmd in COMMANDS if c[1:].startswith(frag)]
 
     def _command(self, text):
         """Slash commands (no network). Returns True to quit."""
@@ -194,8 +187,9 @@ class App:
         return False
 
     def _worker(self, live, text):
+        captured = io.StringIO()
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(captured):
                 out = stream_prompt(
                     self.creds,
                     text,
@@ -204,8 +198,13 @@ class App:
                     self.state,
                     on_text=lambda t: self.queue.put(("text", t)),
                 )
-            if out is None:  # failure reason was printed into the discarded stdout buffer
-                self.queue.put(("note", "no response — check connection or session"))
+            if out is None:
+                # stream_prompt prints the real reason (session, 429, model).
+                reason = next(
+                    (ln.strip() for ln in reversed(captured.getvalue().splitlines()) if ln.strip()),
+                    "",
+                )
+                self.queue.put(("note", reason or "no response — check connection or session"))
         except Exception as e:
             self.queue.put(("note", f"error: {e}"))
         self.queue.put(("done", None))
@@ -232,6 +231,7 @@ class App:
         self.state = {}
         self.messages = []
         self.off = 0
+        self._wrap_cache.clear()
 
     def set_model(self, alias):
         if self.busy:
@@ -339,10 +339,20 @@ class App:
 
     def _messages(self, scr, h, w):
         top, bottom = 1, layout(h)[0]
+        if w != self._wrap_width:  # wrapping depends only on width
+            self._wrap_cache.clear()
+            self._wrap_width = w
         lines = []
         for i, (role, text) in enumerate(self.messages):
             streaming = self.busy and i == len(self.messages) - 1 and role == "assistant"
-            lines += msg_lines(role, text, w, streaming)
+            if streaming:
+                wrapped = msg_lines(role, text, w, streaming)
+            else:
+                key = (role, text)
+                wrapped = self._wrap_cache.get(key)
+                if wrapped is None:
+                    wrapped = self._wrap_cache[key] = msg_lines(role, text, w)
+            lines += wrapped
             lines.append(("", ""))
         if self.off <= 0:
             self.off = 0
@@ -421,14 +431,8 @@ class App:
             items = [text for text, _ in rows]
             title, hint, selectable = "model", "enter pick · esc close", True
         else:
-            items = [
-                "/new new conversation",
-                "/model [name] switch model",
-                "/models list models",
-                "/help this list",
-                "/quit exit",
-                "enter send · ↑↓ scroll · esc clear · ^c quit",
-            ]
+            items = [f"{name} {desc}" for name, desc, _cmd in COMMANDS]
+            items.append("enter send · ↑↓ scroll · esc clear · ^c quit")
             title, hint, selectable = "commands", "any key closes", False
         x, y, bw, bh, vis = dialog_window(h, w, len(items), title, hint, max(len(i) for i in items))
         for r in range(bh):

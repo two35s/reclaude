@@ -4,7 +4,7 @@ import random
 import threading
 import time
 
-from .compat import HAS_CFFI, cffi_requests
+from .compat import cffi_requests
 from .config import IMPERSONATE_TARGET, UA, URL_BASE
 
 _HTTP_SESSION = None
@@ -26,16 +26,14 @@ def get_session():
     global _HTTP_SESSION
     if _HTTP_SESSION is not None:
         return _HTTP_SESSION
-    if HAS_CFFI:
-        with _SESSION_LOCK:
-            if _HTTP_SESSION is not None:  # re-check: another thread may have built it
-                return _HTTP_SESSION
-            try:
-                _HTTP_SESSION = cffi_requests.Session(impersonate=IMPERSONATE_TARGET)
-                return _HTTP_SESSION
-            except Exception:
-                return None
-    return None
+    with _SESSION_LOCK:
+        if _HTTP_SESSION is not None:  # re-check: another thread may have built it
+            return _HTTP_SESSION
+        try:
+            _HTTP_SESSION = cffi_requests.Session(impersonate=IMPERSONATE_TARGET)
+            return _HTTP_SESSION
+        except Exception:
+            return None
 
 
 def close_session():

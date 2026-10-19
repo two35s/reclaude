@@ -102,7 +102,7 @@ def _openai_messages_to_prompt(messages, tools=None, recent_only=False, backend=
     block, an assistant turn carrying ``tool_calls`` is replayed as the
     same fence syntax it was asked to emit, and ``tool`` turns come back
     as ``[Tool result]`` so the model can continue. For the chatgpt
-    backend the block leads the prompt (see ``_HARNESS_PROTOCOL``).
+    backend the block leads the prompt (see ``_HARNESS_PREAMBLE``).
     """
     parts = []
     system_parts = []
@@ -166,11 +166,39 @@ def _resolve_model_from_openai_id(model_id):
     """Map an incoming OpenAI-style model id to a (backend, model) pair.
 
     The 'chatgpt/' prefix routes to the chatgpt.com backend; everything
-    else (bare aliases, full ids, 'si/...' ids) is claude.ai.
+    else (bare aliases, full ids, 'si/...' ids) is claude.ai.  Strip the
+    'si/' prefix first so 'si/chatgpt/auto' still routes to ChatGPT.
     """
+    model_id = model_id.removeprefix("si/")
     if model_id.startswith("chatgpt/"):
         return "chatgpt", model_id.removeprefix("chatgpt/")
-    return "claude", resolve_model(model_id.removeprefix("si/"))
+    return "claude", resolve_model(model_id)
+
+
+def _delete_conversation(backend, creds, conv_id):
+    """Best-effort removal of a server-side conversation."""
+    if not conv_id:
+        return
+    if backend == "chatgpt":
+        from . import chatgpt_stream
+
+        chatgpt_stream.delete_conversation(creds, conv_id)
+    else:
+        from . import http as http_mod
+
+        http_mod.delete_conversation(creds, conv_id)
+
+
+def _adopt_conversation(current, fresh, backend, creds):
+    """Replace a refusing conversation with the retry's fresh one."""
+    new_id = fresh.get("conv_id")
+    if not new_id:
+        return
+    old_id = current.get("conv_id")
+    current.clear()
+    current.update(fresh)
+    if old_id and old_id != new_id:
+        _delete_conversation(backend, creds, old_id)
 
 
 # ── OpenAI SSE format helpers ──────────────────────────────────────────────
@@ -338,13 +366,22 @@ class _Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._error(400, "Invalid JSON body")
             return
+        if not isinstance(req, dict):
+            self._error(400, "JSON body must be an object")
+            return
 
-        messages = req.get("messages", [])
-        if not messages:
-            self._error(400, "No messages provided")
+        messages = req.get("messages")
+        if not isinstance(messages, list) or not messages:
+            self._error(400, "messages must be a non-empty list")
+            return
+        if not all(isinstance(m, dict) for m in messages):
+            self._error(400, "each message must be an object")
             return
 
         model_id = req.get("model", DEFAULT_MODEL)
+        if not isinstance(model_id, str) or not model_id:
+            self._error(400, "model must be a non-empty string")
+            return
         backend, model = _resolve_model_from_openai_id(model_id)
         if backend == "chatgpt" and self.chatgpt_creds is None:
             self._error(
@@ -357,8 +394,9 @@ class _Handler(BaseHTTPRequestHandler):
 
         # Each request may carry an optional conversation_id header so
         # multi-turn sessions share server-side context.  Clients that
-        # don't send one get a per-request ephemeral context.
-        conv_key = self.headers.get("X-Conversation-Id") or req.get("user")
+        # don't send one get a per-request context that is deleted afterwards.
+        # (OpenAI's `user` is an end-user id, not a conversation id.)
+        conv_key = self.headers.get("X-Conversation-Id")
 
         # Build flat prompt (tools are described in-text when present).
         # With a persistent conversation the server already remembers
@@ -384,10 +422,15 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             session_state = {}
 
-        if stream:
-            self._stream_response(prompt, model, model_id, session_state, tools, backend)
-        else:
-            self._sync_response(prompt, model, model_id, session_state, tools, backend)
+        try:
+            if stream:
+                self._stream_response(prompt, model, model_id, session_state, tools, backend)
+            else:
+                self._sync_response(prompt, model, model_id, session_state, tools, backend)
+        finally:
+            if not conv_key:  # one-shot request: don't leak its conversation
+                creds = self.chatgpt_creds if backend == "chatgpt" else self.creds
+                _delete_conversation(backend, creds, session_state.get("conv_id"))
 
     def _dispatch(self, backend):
         """Return (stream_fn, creds) for the chosen backend."""
@@ -473,8 +516,12 @@ class _Handler(BaseHTTPRequestHandler):
             # ("I can't reach that workspace") instead of a fence.  Nothing
             # has reached the client yet, so retry once in a fresh
             # conversation; if that also refuses, its prose is shown.
+            # Keep the retry's conversation so the next turn doesn't resume
+            # the one that refused.
             # shortcut: one retry, no backoff.
-            full, parser, held, live = run_attempt({})
+            retry_state = {}
+            full, parser, held, live = run_attempt(retry_state)
+            _adopt_conversation(session_state, retry_state, backend, backend_creds)
 
         if full is None and not error_flag[0]:
             # Headers are already sent, so surface the failure in-band:
@@ -548,7 +595,9 @@ class _Handler(BaseHTTPRequestHandler):
             if backend == "chatgpt" and not tool_calls and _looks_like_tool_refusal(full):
                 # Prose refusal instead of a tool fence; retry once in a
                 # fresh conversation (same reason as the streaming path).
-                full = run_attempt({})
+                retry_state = {}
+                full = run_attempt(retry_state)
+                _adopt_conversation(session_state, retry_state, backend, backend_creds)
                 if full is None:
                     self._error(502, f"Upstream {backend} API returned no response")
                     return

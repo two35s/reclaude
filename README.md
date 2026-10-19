@@ -67,7 +67,7 @@ The proxy must be running for clients to see the models — if it exits, every r
 
 Point [Crush](https://github.com/charmbracelet/crush), [OpenCode](https://opencode.ai), or any OpenAI client at `http://localhost:8765/v1`.
 
-Streaming (`text/event-stream`) and non-streaming requests are both supported. Every streamed reply is also written to `~/.config/si/last_response.txt` — handy when a client shows you nothing.
+Streaming (`text/event-stream`) and non-streaming requests are both supported. Every streamed reply is also written to `~/.config/si/last_response.txt` — handy when a client shows you nothing. A stream that ends without its terminal event is reported as an upstream error instead of being passed off as a complete reply.
 
 On a `429` the proxy returns the error instead of silently downgrading you to a weaker model — retries and model choice belong to the client (OpenCode retries on its own).
 
@@ -80,9 +80,9 @@ curl http://localhost:8765/v1/chat/completions \
   -d '{"model": "chatgpt/auto", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-Multi-turn memory works the same way: send an `X-Conversation-Id` header (or OpenAI `user` field) and turns share one ChatGPT conversation. Conversation state is keyed per backend, so reusing one key across `si/` and `chatgpt/` models keeps them separate. Tool calling, streaming, and the `429`-surfaces-as-error behavior all apply. Without stored ChatGPT credentials, a `chatgpt/` request returns a clear `400` instead.
+Multi-turn memory works the same way: send an `X-Conversation-Id` header and turns share one ChatGPT conversation (the OpenAI `user` field is not used — it identifies an end user, not a conversation). Conversation state is keyed per backend, so reusing one key across `si/` and `chatgpt/` models keeps them separate. Requests without the header are independent, and their server-side conversation is deleted afterwards. Tool calling, streaming, and the `429`-surfaces-as-error behavior all apply. Without stored ChatGPT credentials, a `chatgpt/` request returns a clear `400` instead.
 
-Requests carry a fallback account id in the sentinel headers for sessions where the auth endpoint doesn't supply one. Set `SI_CHATGPT_ACCOUNT_ID` to your own; it is unverified for other accounts — if a fresh free account hits unexplained sentinel rejections, start there.
+Requests carry a fallback account id in the sentinel headers for sessions where the auth endpoint doesn't supply one. Set `SI_CHATGPT_ACCOUNT_ID` to your own; it is unverified for other accounts — if a fresh free account hits unexplained sentinel rejections, start there. When the sentinel doesn't mint a Turnstile token, si reads a captured one from `SI_CHATGPT_TURNSTILE` or `~/.config/si/chatgpt_turnstile.txt`; the token is session data and is not committed.
 
 **Tool calling works.** OpenAI `tools` are emulated in text: the proxy appends the tool specs to the prompt, asks the model to emit fenced `tool_call` blocks, and converts them into real OpenAI `tool_calls` in the response. Send the results back as `tool` messages on the next request and the model continues. (Claude.ai's native tool channel keeps the stream open waiting for a result, which deadlocks clients that act only on finished responses — so the proxy doesn't use it.) For the `chatgpt/` backend the protocol block leads the prompt, since that surface otherwise answers "I can't reach that workspace" instead of emitting a fence; a tools-bearing reply that still opens with such a refusal is retried once in a fresh conversation before it is shown.
 
@@ -175,6 +175,8 @@ Notes:
 ## Security
 
 Your `sessionKey` and ChatGPT session token are passwords: never share, upload, or commit the credential files. `--clear-session` (and `--chatgpt --clear-session`) when done; if exposed, log out in the browser to invalidate them.
+
+The proxy listens on `127.0.0.1` with no authentication unless `SI_PROXY_TOKEN` is set. On a shared Mac, another local user or process that can reach port 8765 can spend your account's quota; set the token (and give it to the client) or keep the proxy off when not in use. The macOS LaunchAgent plist is written `600` because it carries the token when one is set.
 
 The ChatGPT backend drives chatgpt.com's internal API with your own browser session. That is against OpenAI's terms of service and can get the account limited or banned — use a throwaway account, at your own risk.
 

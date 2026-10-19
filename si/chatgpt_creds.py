@@ -5,11 +5,17 @@ accessToken is derived from it via /api/auth/session and refreshed lazily,
 so nothing time-sensitive is ever persisted.
 """
 
-import json
 import os
 
-from .config import CHATGPT_ACCOUNT_ID_FALLBACK, CHATGPT_CRED_FILE, CHATGPT_UA, CHATGPT_URL_BASE
-from .http import request
+from .compat import cffi_requests
+from .config import (
+    CHATGPT_ACCOUNT_ID_FALLBACK,
+    CHATGPT_CRED_FILE,
+    CHATGPT_IMPERSONATE,
+    CHATGPT_UA,
+    CHATGPT_URL_BASE,
+)
+from .jsonfile import read_json, write_private_json
 
 # Cookie whose presence marks a logged-in chatgpt.com session.
 SESSION_COOKIE = "__Secure-next-auth.session-token"
@@ -57,17 +63,28 @@ class ChatGPTCredentials:
         if os.name != "nt" and (os.stat(CHATGPT_CRED_FILE).st_mode & 0o077):
             os.chmod(CHATGPT_CRED_FILE, 0o600)
             print(f"[!] Tightened permissions on {CHATGPT_CRED_FILE} to user-only.")
-        with open(CHATGPT_CRED_FILE) as f:
-            d = json.load(f)
-        self.cookies = d.get("cookies", {})
+        d = read_json(CHATGPT_CRED_FILE)
+        if d is None:
+            print(
+                f"[!] ChatGPT credentials unreadable: {CHATGPT_CRED_FILE} — "
+                "re-run --chatgpt --from-chrome"
+            )
+            return False
+        cookies = d.get("cookies", {})
+        if not isinstance(cookies, dict):
+            print(
+                f"[!] ChatGPT credentials unreadable: {CHATGPT_CRED_FILE} — "
+                "re-run --chatgpt --from-chrome"
+            )
+            return False
+        self.cookies = cookies
         self.account_id = d.get("account_id")
         return bool(self.session_token)
 
     def save(self):
-        # Created already user-only (0600) so there is no wider window.
-        fd = os.open(CHATGPT_CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump({"cookies": self.cookies, "account_id": self.account_id}, f, indent=2)
+        write_private_json(
+            CHATGPT_CRED_FILE, {"cookies": self.cookies, "account_id": self.account_id}
+        )
         print(f"[+] ChatGPT credentials saved → {CHATGPT_CRED_FILE}")
 
     def clear(self):
@@ -169,8 +186,12 @@ class ChatGPTCredentials:
             "Cookie": self.cookie_header(),
         }
         try:
-            resp = request(
-                "GET", f"{CHATGPT_URL_BASE}/api/auth/session", headers=headers, timeout=20
+            # Pin the chatgpt.com TLS fingerprint, not the claude.ai session's.
+            resp = cffi_requests.get(
+                f"{CHATGPT_URL_BASE}/api/auth/session",
+                headers=headers,
+                impersonate=CHATGPT_IMPERSONATE,
+                timeout=20,
             )
         except Exception as e:
             print(f"[!] ChatGPT auth lookup failed: {e}")

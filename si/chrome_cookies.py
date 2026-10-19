@@ -28,6 +28,7 @@ import tempfile
 from .config import (
     AES_BLOCK_SIZE,
     AES_IV_SIZE,
+    AES_KEY_SIZE,
     CHROME_COOKIE_SCHEMA_VERSION_V24,
     COOKIE_SITES,
     PBKDF2_ITERATIONS_LINUX,
@@ -436,7 +437,9 @@ def read_site_cookies(site, explicit=None):
                     "or use --auto-fetch"
                 )
                 continue
-            key = hashlib.pbkdf2_hmac("sha1", secret, b"saltysalt", info["iterations"], 16)
+            key = hashlib.pbkdf2_hmac(
+                "sha1", secret, b"saltysalt", info["iterations"], AES_KEY_SIZE
+            )
             try:
                 cookies.update(_decrypt_batch(items, key, strip_prefix))
             except CookieExtractionError:

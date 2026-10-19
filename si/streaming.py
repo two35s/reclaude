@@ -9,7 +9,6 @@ import time
 import uuid
 
 from . import http as http_mod
-from .compat import HAS_CFFI
 from .config import _CONFIG_DIR, DEFAULT_MODEL, MODEL_ALIASES, URL_BASE
 from .payload import build_payload
 
@@ -93,9 +92,10 @@ def stream_prompt(
 
     parts = []
     buffer = b""  # bytes: join chunks before decoding so UTF-8 never splits
-    raw_body = []  # capture everything for error detection
+    raw_body = []  # first chunks, kept only while no text has streamed
     error_body = ""
     status_code = [0]  # mutable for callback scope
+    done = [False]
 
     def consume_data(data):
         """Handle one SSE data payload; True means stop consuming."""
@@ -121,11 +121,13 @@ def stream_prompt(
 
     def on_chunk(chunk: bytes):
         nonlocal buffer
-        raw_body.append(chunk)
+        if not parts:  # the error path only reads this before any text arrives
+            raw_body.append(chunk)
         buffer, lines = _split_lines(buffer, chunk)
         for raw_line in lines:
             data = _sse_data(raw_line)
             if data is not None and consume_data(data):
+                done[0] = True
                 return
 
     # ── Send request (reused session + consistent fingerprint) ─
@@ -146,13 +148,6 @@ def stream_prompt(
     # empty string reads to callers (proxy/MCP) as a successful blank reply.
     if resp is None and not parts:
         return None
-
-    # ── Handle non-streaming fallback ────────────────────
-    if resp and not HAS_CFFI and resp.status_code == 200:
-        for line in resp.text.split("\n"):
-            data = _sse_data(line)
-            if data is not None and consume_data(data):
-                break
 
     # ── Check status / detect errors ───────────────────────
     if resp:
@@ -228,6 +223,10 @@ def stream_prompt(
             )
         else:
             print(f"\n[!] HTTP {sc}: {error_body[:200]}")
+        return None
+
+    if not done[0]:
+        print("\n[!] Stream ended before completion; discarding the partial reply.")
         return None
 
     full = "".join(parts)

@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from si.proxy import (
     _looks_like_tool_refusal,
     _openai_messages_to_prompt,
@@ -65,6 +67,7 @@ def test_model_id_mapping():
 def test_chatgpt_model_id_mapping():
     assert _resolve_model_from_openai_id("chatgpt/auto") == ("chatgpt", "auto")
     assert _resolve_model_from_openai_id("chatgpt/gpt-6") == ("chatgpt", "gpt-6")
+    assert _resolve_model_from_openai_id("si/chatgpt/auto") == ("chatgpt", "auto")
 
 
 def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
@@ -272,3 +275,167 @@ def test_registry_cap_evicts_oldest_and_keeps_new_key():
         ("claude", "new-key")
     ] is captured["state"]
     assert len(handler.session_registry) == 256
+
+
+def _request_handler(body, headers=None):
+    import io
+
+    import si.proxy as proxy_mod
+
+    handler = object.__new__(proxy_mod._Handler)
+    handler.headers = {"Content-Length": str(len(body)), **(headers or {})}
+    handler.rfile = io.BytesIO(body)
+    errors = []
+    handler._error = lambda code, msg: errors.append((code, msg))
+    handler._stream_response = lambda *a, **k: errors.append(("stream", None))
+    handler._sync_response = lambda *a, **k: errors.append(("sync", None))
+    return handler, errors
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"{not json",
+        b"[]",
+        json.dumps({"model": 123, "messages": [{"role": "user", "content": "hi"}]}).encode(),
+        json.dumps({"messages": "hi"}).encode(),
+        json.dumps({"messages": [["bad"]]}).encode(),
+        json.dumps({"messages": []}).encode(),
+    ],
+)
+def test_chat_completions_rejects_malformed_fields(body):
+    handler, errors = _request_handler(body)
+    handler._chat_completions()
+    assert errors and errors[0][0] == 400
+    assert not any(kind in ("stream", "sync") for kind, _ in errors)
+
+
+def test_keyless_request_with_user_field_is_deleted(monkeypatch):
+    import si.proxy as proxy_mod
+
+    body = json.dumps(
+        {
+            "model": "si/sonnet",
+            "user": "analytics-user",  # not a conversation id
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    ).encode()
+    handler, errors = _request_handler(body)
+    handler.creds = object()
+    handler.chatgpt_creds = None
+    handler.session_registry = {}
+    handler.registry_lock = proxy_mod.threading.Lock()
+    deleted = []
+    monkeypatch.setattr(proxy_mod, "_delete_conversation", lambda *a: deleted.append(a))
+
+    def fake_stream(prompt, model, model_id, state, tools=None, backend="claude"):
+        state["conv_id"] = "one-shot"
+
+    handler._stream_response = fake_stream
+    handler._chat_completions()
+
+    assert errors == []
+    assert handler.session_registry == {}  # `user` must not become a conversation key
+    assert deleted == [("claude", handler.creds, "one-shot")]
+
+
+def test_keyed_request_registers_and_keeps_conversation(monkeypatch):
+    import si.proxy as proxy_mod
+
+    body = json.dumps(
+        {
+            "model": "si/sonnet",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    ).encode()
+    handler, errors = _request_handler(body, {"X-Conversation-Id": "chat-1"})
+    handler.creds = object()
+    handler.chatgpt_creds = None
+    handler.session_registry = {}
+    handler.registry_lock = proxy_mod.threading.Lock()
+    deleted = []
+    monkeypatch.setattr(proxy_mod, "_delete_conversation", lambda *a: deleted.append(a))
+
+    def fake_stream(prompt, model, model_id, state, tools=None, backend="claude"):
+        state["conv_id"] = "kept"
+
+    handler._stream_response = fake_stream
+    handler._chat_completions()
+
+    assert errors == [] and deleted == []
+    assert handler.session_registry[("claude", "chat-1")]["conv_id"] == "kept"
+
+
+def test_streaming_retry_adopts_the_new_conversation(monkeypatch):
+    import si.chatgpt_stream as chatgpt_mod
+    import si.proxy as proxy_mod
+
+    refusal = "I can't reach the OpenCode workspace."
+    fence = '```tool_call\n{"name": "read", "arguments": {"path": "demo.py"}}\n```'
+    replies = [refusal, fence]
+    seen = []
+    deleted = []
+    monkeypatch.setattr(proxy_mod, "_delete_conversation", lambda *a: deleted.append(a))
+
+    def fake_chatgpt(creds, prompt, **kwargs):
+        state = kwargs["session_state"]
+        seen.append(dict(state))
+        if not state.get("conv_id"):
+            state["conv_id"] = f"conv-{len(seen)}"
+        text = replies.pop(0)
+        kwargs["on_text"](text)
+        return text
+
+    monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
+    handler = _stub_handler()
+    shared = {"conv_id": "old"}
+    handler._stream_response(
+        "hi",
+        "auto",
+        "chatgpt/auto",
+        shared,
+        tools=[{"type": "function", "function": {"name": "read"}}],
+        backend="chatgpt",
+    )
+
+    assert shared["conv_id"] == "conv-2"
+    assert seen == [{"conv_id": "old"}, {}]
+    assert deleted == [("chatgpt", handler.chatgpt_creds, "old")]
+
+
+def test_sync_retry_adopts_the_new_conversation(monkeypatch):
+    import si.chatgpt_stream as chatgpt_mod
+    import si.proxy as proxy_mod
+
+    replies = [
+        "I couldn't reach the workspace.",
+        '```tool_call\n{"name": "read", "arguments": {"path": "demo.py"}}\n```',
+    ]
+    seen = []
+    deleted = []
+    monkeypatch.setattr(proxy_mod, "_delete_conversation", lambda *a: deleted.append(a))
+
+    def fake_chatgpt(creds, prompt, **kwargs):
+        state = kwargs["session_state"]
+        seen.append(dict(state))
+        if not state.get("conv_id"):
+            state["conv_id"] = f"conv-{len(seen)}"
+        return replies.pop(0)
+
+    monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
+    handler = _stub_handler()
+    handler._send = lambda code, ctype, body: None
+    shared = {"conv_id": "old"}
+    handler._sync_response(
+        "hi",
+        "auto",
+        "chatgpt/auto",
+        shared,
+        tools=[{"type": "function", "function": {"name": "read"}}],
+        backend="chatgpt",
+    )
+
+    assert shared["conv_id"] == "conv-2"
+    assert deleted == [("chatgpt", handler.chatgpt_creds, "old")]

@@ -7,6 +7,7 @@ user LaunchAgent so it starts at login and restarts if it exits.
 
 import os
 import plistlib
+import socket
 import subprocess
 import sys
 import time
@@ -40,11 +41,21 @@ def _launchctl(*argv):
 
 
 def _healthy(port):
+    req = urllib.request.Request(f"http://localhost:{port}/v1/models")
+    token = os.environ.get("SI_PROXY_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(f"http://localhost:{port}/v1/models", timeout=1):
+        with urllib.request.urlopen(req, timeout=1):
             return True
     except OSError:
         return False
+
+
+def _port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def install(port=8765):
@@ -52,18 +63,25 @@ def install(port=8765):
         print("[!] --install-service is macOS-only; on Linux use a systemd user unit.")
         return False
     # Replacing an existing agent: unload ours first so the port is free and
-    # the "already in use" check below only sees foreign processes.
+    # the check below only sees foreign processes.  A TCP check catches any
+    # listener, not only a healthy /v1/models, which would otherwise make
+    # launchd crash-loop on bind.
     if os.path.exists(PLIST_PATH):
         _launchctl("unload", "-w", PLIST_PATH)
+    for _ in range(10):
+        if not _port_in_use(port):
+            break
         time.sleep(0.5)
-    if _healthy(port):
-        print(f"[!] something else is already serving http://localhost:{port}/v1 — stop it first")
+    else:
+        print(f"[!] port {port} is already in use — stop that process first")
         return False
 
     os.makedirs(os.path.dirname(PLIST_PATH), exist_ok=True)
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     with open(PLIST_PATH, "wb") as f:
         plistlib.dump(_plist(port), f)
+    if os.name != "nt":
+        os.chmod(PLIST_PATH, 0o600)  # the plist may embed SI_PROXY_TOKEN
     result = _launchctl("load", "-w", PLIST_PATH)
     if result.returncode != 0:
         print(f"[!] launchctl load failed: {(result.stderr or result.stdout).strip()}")

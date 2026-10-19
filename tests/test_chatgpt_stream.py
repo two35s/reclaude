@@ -197,3 +197,57 @@ def test_delete_conversation_sends_delete_via_chatgpt_session(monkeypatch):
             {"Cookie": "session=tok", "Authorization": "Bearer at"},
         )
     ]
+
+
+# ── stream completion ───────────────────────────────────────────────────────
+
+
+class _FakeResp:
+    def __init__(self, code=200):
+        self.status_code = code
+        self.text = ""
+
+
+def _run_stream(monkeypatch, chunks, tmp_path):
+    monkeypatch.setattr(cs, "acquire_sentinel_tokens", lambda creds: {})
+
+    def fake_post(creds, path, payload, headers=None, timeout=30, content_callback=None):
+        for chunk in chunks:
+            content_callback(chunk)
+        return _FakeResp()
+
+    monkeypatch.setattr(cs, "_post", fake_post)
+    monkeypatch.setattr(cs, "_CONFIG_DIR", str(tmp_path))
+    return cs.stream_prompt(
+        None,
+        "hi",
+        session_state={"conv_id": "c", "parent_id": "root"},
+        on_text=lambda _t: None,
+    )
+
+
+def test_stream_cut_before_terminal_event_is_an_error(monkeypatch, tmp_path):
+    # Text arrived, then EOF without message_stream_complete or [DONE].
+    out = _run_stream(monkeypatch, [_delta_event("half") + "\n"], tmp_path)
+    assert out is None
+
+
+def test_stream_with_done_returns_text(monkeypatch, tmp_path):
+    out = _run_stream(monkeypatch, [_delta_event("full") + "\n", "data: [DONE]\n\n"], tmp_path)
+    assert out == "full"
+
+
+def test_stream_with_terminal_success_snapshot_returns_text(monkeypatch, tmp_path):
+    # Some surfaces close after the final snapshot without a separate event.
+    out = _run_stream(
+        monkeypatch,
+        [_delta_event("done", status="finished_successfully") + "\n"],
+        tmp_path,
+    )
+    assert out == "done"
+
+
+def test_stream_in_band_error_discards_partial_text(monkeypatch, tmp_path):
+    error = f"data: {json.dumps({'v': {'error': 'quota exceeded'}})}\n\n"
+    out = _run_stream(monkeypatch, [_delta_event("half") + "\n", error], tmp_path)
+    assert out is None

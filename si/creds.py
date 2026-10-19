@@ -1,11 +1,11 @@
 """Credential load/save/extract/clear."""
 
-import json
 import os
 
 from . import chrome as chrome_mod
 from .config import CRED_FILE, UA, URL_BASE
 from .http import DEFAULT_TIMEOUT
+from .jsonfile import read_json, write_private_json
 
 
 class CredentialManager:
@@ -24,22 +24,24 @@ class CredentialManager:
         if os.name != "nt" and (os.stat(CRED_FILE).st_mode & 0o077):
             os.chmod(CRED_FILE, 0o600)  # tighten creds left world-readable
             print(f"[!] Tightened permissions on {CRED_FILE} to user-only.")
-        with open(CRED_FILE) as f:
-            d = json.load(f)
+        d = read_json(CRED_FILE)
+        if d is None:
+            print(f"[!] Credentials unreadable: {CRED_FILE} — re-run --from-chrome or --auto-fetch")
+            return False
+        cookies = d.get("cookies", {})
+        if not isinstance(cookies, dict):
+            print(f"[!] Credentials unreadable: {CRED_FILE} — re-run --from-chrome or --auto-fetch")
+            return False
         self.org_id = d.get("org_id")
         self.session_key = d.get("session_key")
-        self.cookies = d.get("cookies", {})
+        self.cookies = cookies
         return bool(self.org_id and self.session_key)
 
     def save(self):
-        # Create the file already user-only (0600), never a wider window.
-        fd = os.open(CRED_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(
-                {"org_id": self.org_id, "session_key": self.session_key, "cookies": self.cookies},
-                f,
-                indent=2,
-            )
+        write_private_json(
+            CRED_FILE,
+            {"org_id": self.org_id, "session_key": self.session_key, "cookies": self.cookies},
+        )
         print(f"[+] Credentials saved → {CRED_FILE}")
 
     def clear(self):
@@ -130,14 +132,18 @@ class CredentialManager:
             if name == "sessionKey":
                 self.session_key = value
 
-        # Extract org_id by calling Claude's API from the browser page
-        try:
-            orgs = cdp_mod.fetch_orgs(cdp_port)
-            if orgs and isinstance(orgs, list) and len(orgs) > 0:
-                self.org_id = orgs[0].get("uuid") or orgs[0].get("id")
-                print(f"[+] org_id: {self.org_id}")
-        except Exception:
-            pass
+        # Prefer the org the browser last used; orgs[0] can be a different
+        # team with different limits or no access.
+        self.org_id = self.cookies.get("lastActiveOrg")
+        if not self.org_id:
+            try:
+                orgs = cdp_mod.fetch_orgs(cdp_port)
+                if orgs and isinstance(orgs, list) and len(orgs) > 0:
+                    self.org_id = orgs[0].get("uuid") or orgs[0].get("id")
+            except Exception:
+                pass
+        if self.org_id:
+            print(f"[+] org_id: {self.org_id}")
 
         # Done — close Chrome
         print("[*] Closing Chrome...")

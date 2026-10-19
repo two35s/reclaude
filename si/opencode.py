@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import sys
 
-from .compat import HAS_CFFI
 from .config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR, MODEL_ALIASES
 
 NAME = "si"  # MCP server name, provider id, and model prefix
@@ -71,9 +70,6 @@ def provider_block(port=8765):
 
 def install(port=8765):
     """Register the MCP server globally, then print the optional provider config."""
-    if not HAS_CFFI:
-        print("[!] This Python has no HTTP backend — the server will not start.")
-        print("    Re-run inside the venv: source .venv/bin/activate")
     argv = mcp_argv()
     if shutil.which("opencode") is None:
         print("[!] `opencode` is not on PATH. Run this to enable all projects:")

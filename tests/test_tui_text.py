@@ -2,7 +2,8 @@
 
 import pytest
 
-from si.tui import box_frame, dialog_window, layout, msg_lines, wrap
+import si.tui as tui_mod
+from si.tui import App, box_frame, dialog_window, layout, msg_lines, wrap
 
 
 @pytest.mark.parametrize("width", [1, 5, 20])
@@ -46,3 +47,26 @@ def test_dialog_window_geometry():
     assert (x, y) == ((100 - 36) // 2, (30 - 11) // 2)
     _, _, bw2, bh2, vis2 = dialog_window(8, 30, 9, "model", "hint", 30)
     assert (bw2, bh2, vis2) == (28, 6, 4)
+
+
+def test_completed_messages_are_wrapped_once(monkeypatch):
+    calls = []
+    real = tui_mod.msg_lines
+
+    def counted(*a, **k):
+        calls.append(a[:2])
+        return real(*a, **k)
+
+    monkeypatch.setattr(tui_mod, "msg_lines", counted)
+    monkeypatch.setattr(App, "attr", lambda self, kind: 0)
+
+    class Scr:
+        def addstr(self, *a, **k):
+            pass
+
+    app = App(None, "claude-sonnet-5-5", stealth=False)
+    app.messages = [["user", "hello"], ["assistant", "world"]]
+    app._messages(Scr(), 24, 80)
+    first = len(calls)
+    app._messages(Scr(), 24, 80)
+    assert len(calls) == first  # unchanged messages come from the cache

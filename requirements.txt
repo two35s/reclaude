@@ -1,4 +1,3 @@
 curl_cffi>=0.15.0
 # NOTE: playwright is intentionally NOT required.
 # Credential extraction uses a stdlib-only CDP client (si/cdp.py).
-# Plain `requests` works as a fallback, but without live streaming.

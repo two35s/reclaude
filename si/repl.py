@@ -20,10 +20,9 @@ def print_help():
 """)
 
 
-def print_models(current, aliases=None):
-    aliases = aliases or MODEL_ALIASES
+def print_models(current):
     print("\n  Available models:")
-    for alias, full in aliases.items():
+    for alias, full in MODEL_ALIASES.items():
         marker = " <--" if full == current else ""
         tier = "PRO" if any(k in alias for k in ("opus", "fable", "mythos")) else "FREE"
         print(f"    {alias:14s}  {full:36s}  [{tier}]{marker}")

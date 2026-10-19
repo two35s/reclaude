@@ -44,3 +44,36 @@ def test_transport_failure_returns_none_not_empty_string(monkeypatch):
     monkeypatch.setattr(st.http_mod, "request", boom)
     out = st.stream_prompt(_FakeCreds(), "hi", session_state={"conv_id": "c", "created": True})
     assert out is None
+
+
+class _FakeResp:
+    status_code = 200
+    text = ""
+
+
+def _fake_stream(chunks):
+    def request(*a, **k):
+        for chunk in chunks:
+            k["content_callback"](chunk)
+        return _FakeResp()
+
+    return request
+
+
+def test_stream_cut_before_message_stop_is_an_error(monkeypatch):
+    # A partial answer must not read as a complete reply.
+    chunk = b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"half"}}\n\n'
+    monkeypatch.setattr(st.http_mod, "request", _fake_stream([chunk]))
+    out = st.stream_prompt(_FakeCreds(), "hi", session_state={"conv_id": "c", "created": True})
+    assert out is None
+
+
+def test_stream_with_message_stop_returns_text(monkeypatch, tmp_path):
+    chunks = [
+        b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"full"}}\n\n',
+        b'data: {"type":"message_stop"}\n\n',
+    ]
+    monkeypatch.setattr(st.http_mod, "request", _fake_stream(chunks))
+    monkeypatch.setattr(st, "_CONFIG_DIR", str(tmp_path))
+    out = st.stream_prompt(_FakeCreds(), "hi", session_state={"conv_id": "c", "created": True})
+    assert out == "full"
