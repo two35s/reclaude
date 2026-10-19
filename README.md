@@ -63,7 +63,7 @@ python -m si --proxy --port 9000
 python -m si --proxy &               # run in the background
 ```
 
-The proxy must be running for clients to see the models — if it exits, they disappear until you restart it. (Optional: a `KeepAlive: true` launchd agent keeps it up across reboots.)
+The proxy must be running for clients to see the models — if it exits, every request fails with `ConnectionRefused`. On macOS, `python -m si --install-service` installs a launchd agent that starts it at login and restarts it if it exits (`--uninstall-service` removes it; logs go to `~/Library/Logs/si-proxy.log`).
 
 Point [Crush](https://github.com/charmbracelet/crush), [OpenCode](https://opencode.ai), or any OpenAI client at `http://localhost:8765/v1`.
 
@@ -169,6 +169,7 @@ Notes:
 | ChatGPT `401` / no accessToken | re-run `--chatgpt --from-chrome` |
 | ChatGPT `prepare`/`finalize` failed | the sentinel handshake changed upstream; update si |
 | `429` rate limited | wait, or switch model (`/model haiku` in the CLI/TUI) |
+| `ConnectionRefused` on every model | proxy not running — start `python -m si --proxy`, or `--install-service` on macOS |
 | Keychain prompt | click **Always Allow**, retry |
 
 ## Security

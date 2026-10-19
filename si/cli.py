@@ -67,7 +67,25 @@ def main():
         action="store_true",
         help="Register the MCP tool with OpenCode (all projects); print provider config",
     )
+    ap.add_argument(
+        "--install-service",
+        action="store_true",
+        help="macOS: keep --proxy running via launchd (starts at login)",
+    )
+    ap.add_argument(
+        "--uninstall-service", action="store_true", help="macOS: remove the proxy launchd service"
+    )
     args = ap.parse_args()
+
+    # ── Proxy service (macOS launchd) ────────────────────
+    if args.install_service or args.uninstall_service:
+        from .service import install, uninstall
+
+        if args.uninstall_service:
+            uninstall()
+        else:
+            install(port=args.port)
+        return
 
     # ── OpenCode registration ────────────────────────────
     if args.opencode:
