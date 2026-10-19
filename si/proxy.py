@@ -1,4 +1,4 @@
-"""OpenAI-compatible HTTP proxy adapter for reclaude.
+"""OpenAI-compatible HTTP proxy adapter for si.
 
 Exposes a local server that accepts standard OpenAI /v1/chat/completions
 requests and translates them into claude.ai internal API calls through
@@ -9,15 +9,15 @@ Continue.dev, etc.) to use your browser-session-authenticated Claude
 backend without any modification to those clients.
 
 Usage:
-    python -m claude_re --proxy            # default port 8765
-    python -m claude_re --proxy --port 9000
+    python -m si --proxy            # default port 8765
+    python -m si --proxy --port 9000
 
-Set RECLAUDE_PROXY_TOKEN to require it as a bearer token
+Set SI_PROXY_TOKEN to require it as a bearer token
 (Authorization: Bearer ...) on every request.
 
 Then register in crushrc:
-    provider add reclaude --type openai --base-url "http://localhost:8765/v1"
-    model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000
+    provider add si --type openai --base-url "http://localhost:8765/v1"
+    model add si/sonnet --name "Claude Sonnet (si)" --context-window 200000
 
 Or as LOCAL_ENDPOINT for the archived opencode binary:
     LOCAL_ENDPOINT=http://localhost:8765 opencode
@@ -42,7 +42,7 @@ from .tool_calls import (
 
 # Proxy hardening: cap request bodies; optional bearer token via env.
 MAX_BODY_BYTES = 1_000_000
-PROXY_TOKEN = os.environ.get("RECLAUDE_PROXY_TOKEN", "")
+PROXY_TOKEN = os.environ.get("SI_PROXY_TOKEN", "")
 
 # ── Payload translation ────────────────────────────────────────────────────
 
@@ -118,11 +118,11 @@ def _resolve_model_from_openai_id(model_id):
     """Map an incoming OpenAI-style model id to a (backend, model) pair.
 
     The 'chatgpt/' prefix routes to the chatgpt.com backend; everything
-    else (bare aliases, full ids, 'reclaude/...' ids) is claude.ai.
+    else (bare aliases, full ids, 'si/...' ids) is claude.ai.
     """
     if model_id.startswith("chatgpt/"):
         return "chatgpt", model_id.removeprefix("chatgpt/")
-    return "claude", resolve_model(model_id.removeprefix("reclaude/"))
+    return "claude", resolve_model(model_id.removeprefix("si/"))
 
 
 # ── OpenAI SSE format helpers ──────────────────────────────────────────────
@@ -242,10 +242,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _list_models(self):
         models = [
             {
-                "id": f"reclaude/{alias}",
+                "id": f"si/{alias}",
                 "object": "model",
                 "created": 0,
-                "owned_by": "reclaude",
+                "owned_by": "si",
             }
             for alias in MODEL_ALIASES
         ]
@@ -255,7 +255,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "id": DEFAULT_MODEL,
                 "object": "model",
                 "created": 0,
-                "owned_by": "reclaude",
+                "owned_by": "si",
             }
         )
         if self.chatgpt_creds is not None:
@@ -301,8 +301,7 @@ class _Handler(BaseHTTPRequestHandler):
         if backend == "chatgpt" and self.chatgpt_creds is None:
             self._error(
                 400,
-                "chatgpt backend not configured — run "
-                "'python -m claude_re --chatgpt --from-chrome' first",
+                "chatgpt backend not configured — run 'python -m si --chatgpt --from-chrome' first",
             )
             return
         stream = req.get("stream", False)
@@ -321,7 +320,7 @@ class _Handler(BaseHTTPRequestHandler):
         if conv_key:
             with self.registry_lock:
                 # Keyed per backend: a client reusing one conversation key
-                # across reclaude/ and chatgpt/ models must not inherit the
+                # across si/ and chatgpt/ models must not inherit the
                 # other backend's conversation id.
                 key = (backend, conv_key)
                 # Cap the registry so weeks of proxy uptime don't grow it
@@ -508,14 +507,14 @@ def run_proxy(creds, port=8765, chatgpt_creds=None):
     # each create a server-side conversation (one gets orphaned in the sidebar).
     # Upgrade to per-key locks if that ever shows up in practice.
 
-    print(f"\n[proxy] reclaude OpenAI-compatible proxy listening on http://localhost:{port}")
+    print(f"\n[proxy] si OpenAI-compatible proxy listening on http://localhost:{port}")
     print("\n  Register in Crush (~/.config/crush/crushrc):")
-    print(f'    provider add reclaude --type openai --base-url "http://localhost:{port}/v1"')
-    print('    model add reclaude/sonnet --name "Claude Sonnet (reclaude)" --context-window 200000')
-    print('    model add reclaude/haiku --name "Claude Haiku (reclaude)" --context-window 200000')
+    print(f'    provider add si --type openai --base-url "http://localhost:{port}/v1"')
+    print('    model add si/sonnet --name "Claude Sonnet (si)" --context-window 200000')
+    print('    model add si/haiku --name "Claude Haiku (si)" --context-window 200000')
     if chatgpt_creds is not None:
         print('\n  ChatGPT models enabled (prefix "chatgpt/", e.g. chatgpt/auto):')
-        print('    model add chatgpt/auto --name "ChatGPT (reclaude)" --context-window 200000')
+        print('    model add chatgpt/auto --name "ChatGPT (si)" --context-window 200000')
     print("\n  Or for archived opencode binary:")
     print(f"    LOCAL_ENDPOINT=http://localhost:{port} opencode")
     print("\n  Press Ctrl+C to stop.\n")

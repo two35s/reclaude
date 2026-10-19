@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 
-from claude_re import chatgpt_stream as cs
+from si import chatgpt_stream as cs
 
 # ── fingerprint / blob encoding ─────────────────────────────────────────────
 

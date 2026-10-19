@@ -1,4 +1,4 @@
-"""Register reclaude with OpenCode.
+"""Register si with OpenCode.
 
 The MCP server is registered through OpenCode's own CLI, which preserves the
 rest of the user's config (comments included).  The OpenAI-compatible provider
@@ -15,14 +15,14 @@ import sys
 from .compat import HAS_CFFI
 from .config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR, MODEL_ALIASES
 
-NAME = "reclaude"  # MCP server name, provider id, and model prefix
+NAME = "si"  # MCP server name, provider id, and model prefix
 PICKER_MODELS = ("sonnet", "haiku", "opus")
 
 
 def mcp_argv():
     """argv for `opencode mcp add`, pinning this interpreter and checkout.
 
-    PYTHONPATH makes claude_re importable from any working directory, so the
+    PYTHONPATH makes si importable from any working directory, so the
     entry needs no `cwd` and no `pip install`.
     """
     return [
@@ -36,7 +36,7 @@ def mcp_argv():
         "--",
         sys.executable,
         "-m",
-        "claude_re.mcp_server",
+        "si.mcp_server",
     ]
 
 
@@ -85,7 +85,7 @@ def install(port=8765):
             print(f"    {shlex.join(argv)}")
     print("\n[+] Restart OpenCode, then check: opencode mcp list")
     print("[*] Optional — use Claude as a normal OpenCode model. Start the proxy")
-    print(f"    (python -m claude_re --proxy) and paste into {global_config_path()}:\n")
+    print(f"    (python -m si --proxy) and paste into {global_config_path()}:\n")
     print(json.dumps(provider_block(port), indent=2))
     extra = ", ".join(a for a in MODEL_ALIASES if a not in PICKER_MODELS)
     print(f"\n    Other aliases you can add as models: {extra}")

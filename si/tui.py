@@ -1,10 +1,10 @@
-"""Simple full-screen chat for the Claude.ai RE client.
+"""Simple full-screen chat for the SI client.
 
 One conversation, one input line, no chrome worship: a header, the message
 stream, an input row, and a keybind footer. Keystrokes echo instantly;
 network runs in a worker thread and streams tokens back through a queue.
 
-    .venv/bin/python -m claude_re --tui
+    .venv/bin/python -m si --tui
 
 Standard library only (curses + threading).
 """
@@ -334,7 +334,7 @@ class App:
         scr.refresh()
 
     def _header(self, scr, w):
-        scr.addstr(0, 0, " reclaude ", curses.A_BOLD)
+        scr.addstr(0, 0, " si ", curses.A_BOLD)
         scr.addstr(0, 10, self.model[: max(0, w - 12)], self.attr("user"))
 
     def _messages(self, scr, h, w):

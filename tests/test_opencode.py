@@ -2,31 +2,31 @@
 
 import sys
 
-from claude_re import opencode
-from claude_re.config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR
+from si import opencode
+from si.config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR
 
 
 def test_mcp_argv_pins_interpreter_and_checkout():
     argv = opencode.mcp_argv()
-    assert argv[:4] == ["opencode", "mcp", "add", "reclaude"]
+    assert argv[:4] == ["opencode", "mcp", "add", "si"]
     assert "--global" in argv
     assert f"PYTHONPATH={DIR}" in argv
     # command after `--` is what OpenCode runs
-    assert argv[argv.index("--") + 1 :] == [sys.executable, "-m", "claude_re.mcp_server"]
+    assert argv[argv.index("--") + 1 :] == [sys.executable, "-m", "si.mcp_server"]
 
 
 def test_provider_block_matches_proxy_models(monkeypatch):
     # without stored chatgpt creds only the claude models are offered
     monkeypatch.setattr(opencode.os.path, "exists", lambda _: False)
-    block = opencode.provider_block(port=9000)["providers"]["reclaude"]
+    block = opencode.provider_block(port=9000)["providers"]["si"]
     assert block["settings"]["baseURL"] == "http://localhost:9000/v1"
     assert block["package"] == "@opencode/ai/providers/openai-compatible"
     assert set(block["models"]) == {"sonnet", "haiku", "opus"}
-    assert block["models"]["sonnet"]["modelID"] == "reclaude/sonnet"
+    assert block["models"]["sonnet"]["modelID"] == "si/sonnet"
 
     # with stored chatgpt creds the chatgpt model joins the block
     monkeypatch.setattr(opencode.os.path, "exists", lambda p: p == CHATGPT_CRED_FILE)
-    block = opencode.provider_block(port=9000)["providers"]["reclaude"]
+    block = opencode.provider_block(port=9000)["providers"]["si"]
     assert set(block["models"]) == {"sonnet", "haiku", "opus", "chatgpt"}
     assert block["models"]["chatgpt"]["modelID"] == f"chatgpt/{CHATGPT_DEFAULT_MODEL}"
 
@@ -41,5 +41,5 @@ def test_install_without_opencode_prints_command_and_spawns_nothing(monkeypatch,
     opencode.install()
 
     out = capsys.readouterr().out
-    assert "opencode mcp add reclaude" in out
+    assert "opencode mcp add si" in out
     assert '"providers"' in out  # block is printed for pasting

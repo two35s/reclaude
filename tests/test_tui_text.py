@@ -2,7 +2,7 @@
 
 import pytest
 
-from claude_re.tui import box_frame, dialog_window, layout, msg_lines, wrap
+from si.tui import box_frame, dialog_window, layout, msg_lines, wrap
 
 
 @pytest.mark.parametrize("width", [1, 5, 20])

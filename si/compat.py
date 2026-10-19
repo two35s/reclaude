@@ -20,4 +20,4 @@ except ImportError:
 if not HAS_CFFI:
     # Raise instead of exiting: importing a library must not kill the
     # interpreter.  __main__ turns this into the friendly CLI message.
-    raise ImportError("reclaude needs an HTTP backend: pip install curl_cffi")
+    raise ImportError("si needs an HTTP backend: pip install curl_cffi")

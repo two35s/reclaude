@@ -2,10 +2,10 @@
 
 Speaks newline-delimited JSON-RPC 2.0 on stdin/stdout, per the Model Context
 Protocol stdio transport. The real stdout is reserved for protocol messages;
-reclaude's own progress prints go to stderr, because the streaming backend
+si's own progress prints go to stderr, because the streaming backend
 writes to stdout with bare print() and would otherwise corrupt the stream.
 
-Run:      python -m claude_re.mcp_server
+Run:      python -m si.mcp_server
 Register: see the "MCP server (OpenCode)" section in README.md.
 """
 
@@ -18,7 +18,7 @@ from .config import CHATGPT_DEFAULT_MODEL, CHATGPT_MODELS, resolve_model
 from .creds import CredentialManager
 from .streaming import stream_prompt
 
-SERVER_NAME = "reclaude"
+SERVER_NAME = "si"
 SERVER_VERSION = __version__
 
 # Revisions this server can speak. OpenCode's default "legacy" negotiation
@@ -41,7 +41,7 @@ def _load_creds():
     """Load Claude.ai credentials from disk (no caching, so re-login takes effect)."""
     creds = CredentialManager()
     if not creds.load() or not creds.is_valid():
-        raise RuntimeError("No valid Claude.ai credentials. Run: python -m claude_re --auto-fetch")
+        raise RuntimeError("No valid Claude.ai credentials. Run: python -m si --auto-fetch")
     return creds
 
 
@@ -52,13 +52,13 @@ def _load_chatgpt_creds():
     creds = ChatGPTCredentials()
     if not creds.load() or not creds.is_valid():
         raise RuntimeError(
-            "No valid ChatGPT credentials. Run: python -m claude_re --chatgpt --from-chrome"
+            "No valid ChatGPT credentials. Run: python -m si --chatgpt --from-chrome"
         )
     return creds
 
 
 def run_claude(prompt, model):
-    """Call the reclaude backend. Returns (text, None) or (None, error_message)."""
+    """Call the si backend. Returns (text, None) or (None, error_message)."""
     try:
         creds = _load_creds()
     except RuntimeError as e:
@@ -155,7 +155,7 @@ def _tool_schema(name, description, prompt_description, model_description, defau
 def _claude_schema():
     return _tool_schema(
         TOOL_NAME,
-        "Ask Claude.ai (through the local reclaude browser session) a question "
+        "Ask Claude.ai (through the local si browser session) a question "
         "and return its text reply. Use it for a second opinion or when the user "
         "asks for Claude specifically.",
         "The question or instruction to send to Claude.ai.",
@@ -167,7 +167,7 @@ def _claude_schema():
 def _chatgpt_schema():
     return _tool_schema(
         CHATGPT_TOOL_NAME,
-        "Ask ChatGPT (through the local reclaude browser session) a question "
+        "Ask ChatGPT (through the local si browser session) a question "
         "and return its text reply. Use it for a second opinion or when the "
         "user asks for ChatGPT specifically.",
         "The question or instruction to send to ChatGPT.",
@@ -254,7 +254,7 @@ def _write(obj, out):
 def serve(instream, outstream, ask=run_claude, ask_chatgpt=run_chatgpt):
     """Read newline-delimited JSON-RPC from ``instream``, write replies to ``outstream``.
 
-    sys.stdout is redirected to stderr for the duration so reclaude's own prints
+    sys.stdout is redirected to stderr for the duration so si's own prints
     never reach the protocol stream. Requests are handled sequentially, which
     (with the lock in the runners) also keeps the shared conversations safe.
     """

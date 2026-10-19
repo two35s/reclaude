@@ -2,7 +2,7 @@
 
 import json
 
-from claude_re.proxy import _openai_messages_to_prompt, _resolve_model_from_openai_id
+from si.proxy import _openai_messages_to_prompt, _resolve_model_from_openai_id
 
 
 def test_system_prepended_and_turns_keep_order():
@@ -53,7 +53,7 @@ def test_recent_only_false_keeps_full_transcript():
 
 
 def test_model_id_mapping():
-    assert _resolve_model_from_openai_id("reclaude/sonnet") == ("claude", "claude-sonnet-5-5")
+    assert _resolve_model_from_openai_id("si/sonnet") == ("claude", "claude-sonnet-5-5")
     assert _resolve_model_from_openai_id("haiku") == ("claude", "claude-haiku-5-5")
     assert _resolve_model_from_openai_id("claude-sonnet-4-6") == ("claude", "claude-sonnet-4-6")
 
@@ -68,7 +68,7 @@ def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
     # empty 200 with finish_reason stop.
     import io
 
-    import claude_re.proxy as proxy_mod
+    import si.proxy as proxy_mod
 
     handler = object.__new__(proxy_mod._Handler)
     handler.wfile = io.BytesIO()
@@ -78,7 +78,7 @@ def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
     handler.creds = None
 
     monkeypatch.setattr(proxy_mod, "claude_stream_prompt", lambda *a, **k: None)
-    handler._stream_response("hi", "claude-sonnet-5-5", "reclaude/sonnet", {})
+    handler._stream_response("hi", "claude-sonnet-5-5", "si/sonnet", {})
 
     out = handler.wfile.getvalue().decode()
     assert "upstream claude error" in out
@@ -94,7 +94,7 @@ def test_stream_response_routes_chatgpt_backend(monkeypatch):
     # chatgpt/ models must reach the chatgpt backend, never the claude one.
     import io
 
-    import claude_re.proxy as proxy_mod
+    import si.proxy as proxy_mod
 
     handler = object.__new__(proxy_mod._Handler)
     handler.wfile = io.BytesIO()
@@ -115,7 +115,7 @@ def test_stream_response_routes_chatgpt_backend(monkeypatch):
     def wrong_backend(*a, **k):
         raise AssertionError("claude backend must not receive chatgpt/ models")
 
-    import claude_re.chatgpt_stream as chatgpt_mod
+    import si.chatgpt_stream as chatgpt_mod
 
     monkeypatch.setattr(proxy_mod, "claude_stream_prompt", wrong_backend)
     monkeypatch.setattr(chatgpt_mod, "stream_prompt", fake_chatgpt)
@@ -128,12 +128,12 @@ def test_stream_response_routes_chatgpt_backend(monkeypatch):
 def test_registry_cap_evicts_oldest_and_keeps_new_key():
     import io
 
-    import claude_re.proxy as proxy_mod
+    import si.proxy as proxy_mod
 
     body = json.dumps(
         {
             "messages": [{"role": "user", "content": "hi"}],
-            "model": "reclaude/sonnet",
+            "model": "si/sonnet",
             "stream": True,
         }
     ).encode()

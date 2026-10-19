@@ -2,8 +2,8 @@
 
 import json
 
-from claude_re.proxy import _non_stream_response, _openai_messages_to_prompt
-from claude_re.tool_calls import (
+from si.proxy import _non_stream_response, _openai_messages_to_prompt
+from si.tool_calls import (
     FENCE_END,
     FENCE_START,
     ToolCallParser,

@@ -10,9 +10,17 @@ PROFILE = os.path.join(DIR, "claude_profile")
 
 # Credential storage: outside repo in user config directory
 if sys.platform == "win32":
-    _CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "claude_re")
+    _CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "si")
+    _OLD_CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "claude_re")
 else:
-    _CONFIG_DIR = os.path.expanduser("~/.config/claude_re")
+    _CONFIG_DIR = os.path.expanduser("~/.config/si")
+    _OLD_CONFIG_DIR = os.path.expanduser("~/.config/claude_re")
+# One-time migration from the pre-rename location: stored sessions survive.
+if not os.path.isdir(_CONFIG_DIR) and os.path.isdir(_OLD_CONFIG_DIR):
+    try:
+        os.rename(_OLD_CONFIG_DIR, _CONFIG_DIR)
+    except OSError:
+        pass  # fall back to re-running the credential command
 os.makedirs(_CONFIG_DIR, mode=0o700, exist_ok=True)
 if os.name != "nt":
     # mode above only applies at creation; tighten pre-existing dirs.

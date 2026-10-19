@@ -1,7 +1,7 @@
 """Model aliases pass through unknown names; payloads get fresh UUIDs."""
 
-from claude_re.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
-from claude_re.payload import build_payload
+from si.config import MODEL_ALIASES, PAYLOAD_TEMPLATE, resolve_model
+from si.payload import build_payload
 
 
 def test_resolve_alias_and_passthrough():

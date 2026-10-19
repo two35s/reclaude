@@ -1,4 +1,4 @@
-"""Allow `python -m claude_re`."""
+"""Allow `python -m si`."""
 
 try:
     from .cli import main

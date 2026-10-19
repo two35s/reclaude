@@ -3,8 +3,8 @@
 import io
 import json
 
-from claude_re import mcp_server
-from claude_re.mcp_server import handle_message, serve
+from si import mcp_server
+from si.mcp_server import handle_message, serve
 
 
 def _init(mid=1, version=None):
@@ -33,7 +33,7 @@ def test_initialize_negotiates_supported_version():
     result = resp["result"]
     assert result["protocolVersion"] == "2025-06-18"
     assert result["capabilities"]["tools"] == {"listChanged": False}
-    assert result["serverInfo"]["name"] == "reclaude"
+    assert result["serverInfo"]["name"] == "si"
 
 
 def test_initialize_falls_back_on_unknown_version():
@@ -159,7 +159,7 @@ def test_unknown_notification_ignored():
 # ── backend integration (run_claude) ────────────────────────────────────────
 
 
-def test_run_claude_reuses_one_conversation(monkeypatch):
+def test_run_siuses_one_conversation(monkeypatch):
     monkeypatch.setattr(mcp_server, "_session", {"conv_id": None, "created": False})
     monkeypatch.setattr(mcp_server, "_load_creds", lambda: object())
     seen = []
@@ -177,7 +177,7 @@ def test_run_claude_reuses_one_conversation(monkeypatch):
     assert seen == [None, "conv-1"]
 
 
-def test_run_claude_resolves_model_alias(monkeypatch):
+def test_run_sisolves_model_alias(monkeypatch):
     monkeypatch.setattr(mcp_server, "_load_creds", lambda: object())
     seen = {}
 

@@ -1,7 +1,7 @@
 """SSE parsing + transport-failure behavior."""
 
-import claude_re.streaming as st
-from claude_re.streaming import _split_lines, _sse_data
+import si.streaming as st
+from si.streaming import _split_lines, _sse_data
 
 
 class _FakeCreds:

@@ -24,7 +24,7 @@ DEFAULT_BATCH_DELAY = 2
 def main():
     print()
     print("  ╔════════════════════════════════════════════════════╗")
-    print("  ║  Claude.ai RE Client v4 — Secure + Stealth         ║")
+    print("  ║  SI — Secure + Stealth                             ║")
     print("  ╚════════════════════════════════════════════════════╝")
     print()
 
@@ -161,20 +161,20 @@ def main():
             return
     elif args.manual:
         creds.manual_input()
-    elif (args.org_id or os.environ.get("CLAUDE_RE_ORG_ID")) and (
-        args.cookie or os.environ.get("CLAUDE_RE_COOKIE")
+    elif (args.org_id or os.environ.get("SI_ORG_ID")) and (
+        args.cookie or os.environ.get("SI_COOKIE")
     ):
         if args.cookie:
             print(
                 "[!] Warning: --cookie exposes your sessionKey via `ps`/shell history;"
-                " prefer the CLAUDE_RE_COOKIE env var."
+                " prefer the SI_COOKIE env var."
             )
-        if _inline_creds_conflict(creds, args.org_id or os.environ.get("CLAUDE_RE_ORG_ID")):
+        if _inline_creds_conflict(creds, args.org_id or os.environ.get("SI_ORG_ID")):
             print("[!] Stored credentials exist for a different org; keeping them.")
             print("    Run --clear-session first to replace them.")
             return
-        creds.org_id = args.org_id or os.environ.get("CLAUDE_RE_ORG_ID")
-        creds._parse_cookies(args.cookie or os.environ.get("CLAUDE_RE_COOKIE", ""))
+        creds.org_id = args.org_id or os.environ.get("SI_ORG_ID")
+        creds._parse_cookies(args.cookie or os.environ.get("SI_COOKIE", ""))
         creds.save()
     elif not creds.load():
         print("[!] No credentials. Use --manual, --auto-fetch, or --login")

@@ -1,6 +1,6 @@
 """Rate-limit handling: bounded budget, haiku fallback, proxy-mode opt-out."""
 
-import claude_re.streaming as st
+import si.streaming as st
 
 
 class _Resp:

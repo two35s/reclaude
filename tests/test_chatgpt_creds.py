@@ -1,6 +1,6 @@
 """ChatGPT credentials: session-token sharding reassembly."""
 
-from claude_re.chatgpt_creds import SESSION_COOKIE, reassemble_session_token
+from si.chatgpt_creds import SESSION_COOKIE, reassemble_session_token
 
 
 def test_unsharded_token_returned_unchanged():

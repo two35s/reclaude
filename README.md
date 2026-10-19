@@ -1,14 +1,14 @@
-# reclaude
+# SI
 
-Terminal client for Claude.ai — replays your own browser session against Claude's internal REST + SSE endpoint and streams replies token-by-token. No API key.
+Terminal client for Claude.ai and ChatGPT — replays your own browser session against their internal endpoints and streams replies token-by-token. No API key.
 
 > Research tool. It runs under your Claude.ai account: its limits, tiers, and billing still apply. It does not bypass rate limits or paywalls.
 
 ## Demo
 
-![reclaude's models in OpenCode](docs/demo.gif)
+![si's models in OpenCode](docs/demo.gif)
 
-With the proxy running, `reclaude/haiku` shows up in OpenCode's `/models` picker like any other provider. Pick it, ask, watch the reply stream in — all through your Claude.ai session, no API key.
+With the proxy running, `si/haiku` shows up in OpenCode's `/models` picker like any other provider. Pick it, ask, watch the reply stream in — all through your Claude.ai session, no API key.
 
 ## Install
 
@@ -16,36 +16,36 @@ With the proxy running, `reclaude/haiku` shows up in OpenCode's `/models` picker
 git clone https://github.com/two35s/reclaude.git && cd reclaude
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python -m claude_re --opencode   # register the MCP tool with OpenCode (see below)
+python -m si --opencode   # register the MCP tool with OpenCode (see below)
 ```
 
 ## Login (once)
 
 ```bash
-python -m claude_re --from-chrome   # steal session from your logged-in Chrome (recommended)
-python -m claude_re --auto-fetch    # or: launch Chrome, log in, auto-extract over CDP
-python -m claude_re --manual        # or: paste org_id + Cookie header by hand
+python -m si --from-chrome   # steal session from your logged-in Chrome (recommended)
+python -m si --auto-fetch    # or: launch Chrome, log in, auto-extract over CDP
+python -m si --manual        # or: paste org_id + Cookie header by hand
 ```
 
-Saves to `~/.config/claude_re/claude_session.json` (`600`).
+Saves to `~/.config/si/claude_session.json` (`600`).
 
 ### ChatGPT credentials
 
 ```bash
-python -m claude_re --chatgpt --from-chrome   # steal chatgpt.com session from Chrome
-python -m claude_re --chatgpt --manual        # or paste the session-token cookie
-python -m claude_re --chatgpt --clear-session # delete stored chatgpt creds
+python -m si --chatgpt --from-chrome   # steal chatgpt.com session from Chrome
+python -m si --chatgpt --manual        # or paste the session-token cookie
+python -m si --chatgpt --clear-session # delete stored chatgpt creds
 ```
 
-Saves to `~/.config/claude_re/chatgpt_session.json` (`600`). The proxy and MCP server pick these up automatically; a `chatgpt/`-prefixed model then appears alongside the claude ones. Re-run `--chatgpt --from-chrome` when requests come back `401`.
+Saves to `~/.config/si/chatgpt_session.json` (`600`). The proxy and MCP server pick these up automatically; a `chatgpt/`-prefixed model then appears alongside the claude ones. Re-run `--chatgpt --from-chrome` when requests come back `401`.
 
 ## Chat
 
 ```bash
-python -m claude_re                 # REPL
-python -m claude_re --tui           # full-screen chat
-python -m claude_re --prompt "..."  # one shot
-python -m claude_re --model haiku   # haiku | sonnet (default) | opus | fable …
+python -m si                 # REPL
+python -m si --tui           # full-screen chat
+python -m si --prompt "..."  # one shot
+python -m si --model haiku   # haiku | sonnet (default) | opus | fable …
 ```
 
 TUI commands: `/new` `/model [name]` `/models` `/help` `/quit`.
@@ -56,16 +56,16 @@ One server-side conversation per session gives multi-turn memory; stealth mode d
 ## Proxy
 
 ```bash
-python -m claude_re --proxy                 # OpenAI-compatible API on :8765
-python -m claude_re --proxy --port 9000
-python -m claude_re --proxy &               # run in the background
+python -m si --proxy                 # OpenAI-compatible API on :8765
+python -m si --proxy --port 9000
+python -m si --proxy &               # run in the background
 ```
 
 The proxy must be running for clients to see the models — if it exits, they disappear until you restart it. (Optional: a `KeepAlive: true` launchd agent keeps it up across reboots.)
 
 Point [Crush](https://github.com/charmbracelet/crush), [OpenCode](https://opencode.ai), or any OpenAI client at `http://localhost:8765/v1`.
 
-Streaming (`text/event-stream`) and non-streaming requests are both supported. Every streamed reply is also written to `~/.config/claude_re/last_response.txt` — handy when a client shows you nothing.
+Streaming (`text/event-stream`) and non-streaming requests are both supported. Every streamed reply is also written to `~/.config/si/last_response.txt` — handy when a client shows you nothing.
 
 On a `429` the proxy returns the error instead of silently downgrading you to a weaker model — retries and model choice belong to the client (OpenCode retries on its own).
 
@@ -78,7 +78,7 @@ curl http://localhost:8765/v1/chat/completions \
   -d '{"model": "chatgpt/auto", "messages": [{"role": "user", "content": "hi"}]}'
 ```
 
-Multi-turn memory works the same way: send an `X-Conversation-Id` header (or OpenAI `user` field) and turns share one ChatGPT conversation. Conversation state is keyed per backend, so reusing one key across `reclaude/` and `chatgpt/` models keeps them separate. Tool calling, streaming, and the `429`-surfaces-as-error behavior all apply. Without stored ChatGPT credentials, a `chatgpt/` request returns a clear `400` instead.
+Multi-turn memory works the same way: send an `X-Conversation-Id` header (or OpenAI `user` field) and turns share one ChatGPT conversation. Conversation state is keyed per backend, so reusing one key across `si/` and `chatgpt/` models keeps them separate. Tool calling, streaming, and the `429`-surfaces-as-error behavior all apply. Without stored ChatGPT credentials, a `chatgpt/` request returns a clear `400` instead.
 
 Requests carry a fallback account id in the sentinel headers (`CHATGPT_ACCOUNT_ID_FALLBACK` in `config.py`) for sessions where the auth endpoint doesn't supply one. It was captured from live testing and is unverified for other accounts — if a fresh free account hits unexplained sentinel rejections, start there.
 
@@ -86,21 +86,21 @@ Requests carry a fallback account id in the sentinel headers (`CHATGPT_ACCOUNT_I
 
 ### Use as a normal OpenCode model
 
-With the proxy running, `reclaude/sonnet`, `reclaude/haiku`, and `reclaude/opus` appear in OpenCode's `/models` picker like any other provider. Select one and chat normally — tools (read/edit/bash), streaming, and multi-turn all work through your Claude.ai account.
+With the proxy running, `si/sonnet`, `si/haiku`, and `si/opus` appear in OpenCode's `/models` picker like any other provider. Select one and chat normally — tools (read/edit/bash), streaming, and multi-turn all work through your Claude.ai account.
 
-`python -m claude_re --opencode` prints the ready-to-paste `providers` block for your global config. Or paste it by hand:
+`python -m si --opencode` prints the ready-to-paste `providers` block for your global config. Or paste it by hand:
 
 ```jsonc
 {
   "providers": {
-    "reclaude": {
-      "name": "reclaude",
+    "si": {
+      "name": "si",
       "package": "@opencode/ai/providers/openai-compatible",
       "settings": { "baseURL": "http://localhost:8765/v1" },
       "models": {
-        "sonnet": { "name": "Claude Sonnet", "modelID": "reclaude/sonnet" },
-        "haiku": { "name": "Claude Haiku", "modelID": "reclaude/haiku" },
-        "opus": { "name": "Claude Opus", "modelID": "reclaude/opus" }
+        "sonnet": { "name": "Claude Sonnet", "modelID": "si/sonnet" },
+        "haiku": { "name": "Claude Haiku", "modelID": "si/haiku" },
+        "opus": { "name": "Claude Opus", "modelID": "si/opus" }
       }
     }
   }
@@ -109,12 +109,12 @@ With the proxy running, `reclaude/sonnet`, `reclaude/haiku`, and `reclaude/opus`
 
 ## OpenCode MCP server
 
-Expose reclaude to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`, `chatgpt_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai or ChatGPT through reclaude when you ask.
+Expose si to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`, `chatgpt_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai or ChatGPT through si when you ask.
 
 Install it with one command, run from this checkout:
 
 ```bash
-python -m claude_re --opencode
+python -m si --opencode
 ```
 
 That calls OpenCode's own `opencode mcp add`, so your existing config (comments included) is preserved. Restart OpenCode, then check `opencode mcp list`.
@@ -128,10 +128,10 @@ Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts a
 {
   "mcp": {
     "servers": {
-      "reclaude": {
+      "si": {
         "type": "local",
-        "command": ["/absolute/path/to/reclaude/.venv/bin/python", "-m", "claude_re.mcp_server"],
-        "environment": { "PYTHONPATH": "/absolute/path/to/reclaude" }
+        "command": ["/absolute/path/to/si/.venv/bin/python", "-m", "si.mcp_server"],
+        "environment": { "PYTHONPATH": "/absolute/path/to/si" }
       }
     }
   }
@@ -145,19 +145,19 @@ Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts a
 Check the handshake standalone:
 
 ```bash
-printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | .venv/bin/python -m claude_re.mcp_server
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | .venv/bin/python -m si.mcp_server
 ```
 
 Notes:
 
 - **Shared conversations.** All `claude_ask` calls reuse one Claude.ai conversation, and all `chatgpt_ask` calls one ChatGPT conversation, for the server's lifetime, so follow-ups keep context. Neither is stealth-deleted and both appear in the respective sidebar until you remove them.
-- **Diagnostics on stderr.** reclaude's progress/error output goes to stderr, so it never corrupts the MCP protocol stream on stdout.
+- **Diagnostics on stderr.** si's progress/error output goes to stderr, so it never corrupts the MCP protocol stream on stdout.
 - **Limitations.** Text-only passthrough — no image output, and no tool calls come back. Requests run under your own accounts, so plan limits apply. One call can take up to the HTTP timeout (120 s), longer under rate limiting. `chatgpt_ask` errors cleanly when ChatGPT credentials are missing or the turn is refused (quota, rate limit).
-- **Troubleshooting.** `Session invalid or expired` → re-run `python -m claude_re --auto-fetch` (Claude) or `--chatgpt --from-chrome` (ChatGPT); the next call picks up the new credentials (no restart needed). If the tool is missing, check OpenCode's MCP logs and that the venv path in `command` is absolute and correct.
+- **Troubleshooting.** `Session invalid or expired` → re-run `python -m si --auto-fetch` (Claude) or `--chatgpt --from-chrome` (ChatGPT); the next call picks up the new credentials (no restart needed). If the tool is missing, check OpenCode's MCP logs and that the venv path in `command` is absolute and correct.
 
 ## More flags
 
-`--batch FILE` one prompt per line → `~/.config/claude_re/batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting · `--opencode` register the MCP tool with OpenCode and print the provider config.
+`--batch FILE` one prompt per line → `~/.config/si/batch_results.json` · `--jailbreak FILE` prompt from file · `--org-id/--cookie` inline creds · `--clear-session` wipe creds · `--login` save a Chrome profile without extracting · `--opencode` register the MCP tool with OpenCode and print the provider config.
 
 ## If it breaks
 
@@ -165,7 +165,7 @@ Notes:
 |---|---|
 | `Session invalid or expired` | re-run `--from-chrome` or `--auto-fetch` |
 | ChatGPT `401` / no accessToken | re-run `--chatgpt --from-chrome` |
-| ChatGPT `prepare`/`finalize` failed | the sentinel handshake changed upstream; update reclaude |
+| ChatGPT `prepare`/`finalize` failed | the sentinel handshake changed upstream; update si |
 | `429` rate limited | wait, or switch model (`/model haiku` in the CLI/TUI) |
 | Keychain prompt | click **Always Allow**, retry |
 

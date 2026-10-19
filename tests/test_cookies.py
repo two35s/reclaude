@@ -5,8 +5,8 @@ from unittest import mock
 
 import pytest
 
-from claude_re import chrome_cookies
-from claude_re.config import AES_KEY_SIZE, CHROME_COOKIE_SCHEMA_VERSION_V24
+from si import chrome_cookies
+from si.config import AES_KEY_SIZE, CHROME_COOKIE_SCHEMA_VERSION_V24
 
 
 def test_prefix_stripped_when_version_new():

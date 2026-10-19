@@ -291,7 +291,7 @@ def _read_cookie_rows(db_path, host_patterns):
     Returns (rows, schema_version); Chrome >= 130 stores version >= 24 and
     prefixes each encrypted value with a 32-byte SHA256(domain).
     """
-    tmp = tempfile.mkdtemp(prefix="claude_re_ck_")
+    tmp = tempfile.mkdtemp(prefix="si_ck_")
     try:
         for suffix in ("", "-wal", "-shm"):
             src = db_path + suffix

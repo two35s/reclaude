@@ -2,7 +2,7 @@
 
 import pytest
 
-from claude_re.tui import App
+from si.tui import App
 
 
 @pytest.fixture
