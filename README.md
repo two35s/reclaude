@@ -1,4 +1,4 @@
-# SI
+# Reclaude
 
 Terminal client for Claude.ai and ChatGPT — replays your own browser session against their internal endpoints and streams replies token-by-token. No API key.
 
