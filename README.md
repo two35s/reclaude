@@ -10,6 +10,88 @@ Terminal client for Claude.ai and ChatGPT — replays your own browser session a
 
 With the proxy running, `si/haiku` shows up in OpenCode's `/models` picker like any other provider. Pick it, ask, watch the reply stream in — all through your Claude.ai session, no API key.
 
+## Architecture
+
+si is three thin surfaces — a terminal client, an OpenAI-compatible proxy, and an MCP server — over one pair of streaming backends.
+
+```mermaid
+flowchart TB
+    subgraph clients["Clients"]
+        direction LR
+        term["Terminal<br/>REPL · one-shot · batch · TUI"]
+        oai["OpenAI clients<br/>OpenCode · Crush · curl"]
+        host["MCP host<br/>OpenCode"]
+    end
+
+    subgraph entry["Entry points"]
+        direction LR
+        cli["cli.py<br/>flags · REPL loop"]
+        proxy["proxy.py<br/>OpenAI-compatible /v1 on 127.0.0.1:8765"]
+        mcp["mcp_server.py<br/>JSON-RPC 2.0 over stdio"]
+    end
+
+    subgraph backends["Backends"]
+        direction LR
+        claude_be["streaming.py<br/>claude.ai SSE · 429 retry/fallback"]
+        chatgpt_be["chatgpt_stream.py<br/>sentinel PoW · SSE patch folding"]
+        tools["tool_calls.py<br/>fenced tool-call emulation"]
+    end
+
+    subgraph transport["Transport"]
+        http["http.py<br/>curl_cffi impersonation · retries · conversation CRUD"]
+    end
+
+    subgraph creds["Credentials — ~/.config/si"]
+        direction LR
+        cookies["chrome_cookies.py<br/>read + decrypt Chrome cookie DB"]
+        cdp["chrome.py + cdp.py<br/>launch Chrome · extract over CDP"]
+        claude_creds["creds.py<br/>Claude session"]
+        chatgpt_creds["chatgpt_creds.py<br/>ChatGPT session"]
+        store[("claude_session.json<br/>chatgpt_session.json<br/>0600")]
+    end
+
+    subgraph upstream["Upstream"]
+        direction LR
+        claude_api["claude.ai internal API"]
+        chatgpt_api["chatgpt.com backend API"]
+    end
+
+    term --> cli
+    oai --> proxy
+    host --> mcp
+
+    cli --> claude_be
+    cli --> chatgpt_be
+    proxy --> claude_be
+    proxy --> chatgpt_be
+    proxy -.->|tools| tools
+    mcp --> claude_be
+    mcp --> chatgpt_be
+
+    claude_be --> http
+    http --> claude_api
+    chatgpt_be -->|own pinned session| chatgpt_api
+
+    cookies --> claude_creds
+    cookies --> chatgpt_creds
+    cdp --> claude_creds
+    claude_creds --> store
+    chatgpt_creds --> store
+    claude_creds -.->|creds| claude_be
+    chatgpt_creds -.->|creds| chatgpt_be
+```
+
+A request crosses four layers:
+
+1. **Credentials** — `--from-chrome` reads the browser's cookie DB and decrypts it with the OS keyring (`chrome_cookies.py`); `--auto-fetch` launches real Chrome and pulls cookies plus the org id over CDP (`chrome.py`, `cdp.py`). Sessions land in `~/.config/si/*.json` (`0600`). The MCP server re-reads them per call (no restart after re-login); the proxy loads them at startup, so restart it after a re-login.
+2. **Entry points** — `cli.py` parses flags and runs the REPL/one-shot/batch modes; `proxy.py` serves `/v1/models` and `/v1/chat/completions`; `mcp_server.py` answers `tools/call` for `claude_ask` / `chatgpt_ask`. The proxy routes on the model id (`chatgpt/…` → ChatGPT backend, everything else → Claude); the MCP server exposes one tool per backend.
+3. **Backends** — `streaming.py` posts to Claude.ai's completion endpoint and folds SSE deltas, with bounded 429 retry/fallback; `chatgpt_stream.py` runs the sentinel handshake (proof-of-work + Turnstile) and folds ChatGPT's snapshot/patch SSE into text. `tool_calls.py` turns fenced `tool_call` blocks into real OpenAI `tool_calls`, because Claude.ai's native tool channel deadlocks clients that only act on finished responses.
+4. **Transport** — `http.py` keeps one `curl_cffi` session pinned to a Chrome TLS fingerprint, handles retries/backoff, and owns conversation create/delete. The ChatGPT backend keeps its own pinned session so the two fingerprints never mix.
+
+Conversation state is one server-side chat per client session: the CLI/TUI delete it on exit when stealth is on, the proxy keys it by `X-Conversation-Id` (deleting one-shot chats), and the MCP server keeps one per provider for its lifetime.
+
+Install-time helpers: `opencode.py` registers the MCP server via `opencode mcp add`; `service.py` installs the macOS LaunchAgent that supervises the proxy.
+
 ## Install
 
 ```bash
