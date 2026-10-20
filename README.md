@@ -4,6 +4,9 @@ Terminal client for Claude.ai and ChatGPT — replays your own browser session a
 
 > Research tool. It runs under your Claude.ai account: its limits, tiers, and billing still apply. It does not bypass rate limits or paywalls.
 
+> [!WARNING]
+> **Do not use your main account.** si drives claude.ai and chatgpt.com through your own browser session — behavior that can get the account limited or banned. Use a throwaway account you can afford to lose, never one tied to your email, billing, or work.
+
 ## Demo
 
 ![si's models in OpenCode](docs/demo.gif)
