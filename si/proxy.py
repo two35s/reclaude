@@ -29,9 +29,10 @@ import os
 import threading
 import time
 import uuid
+from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .config import CHATGPT_MODELS, DEFAULT_MODEL, MODEL_ALIASES, resolve_model
+from .config import CHATGPT_MODELS, DEFAULT_MODEL, META_MODELS, MODEL_ALIASES, resolve_model
 from .streaming import stream_prompt as claude_stream_prompt
 from .tool_calls import (
     ToolCallParser,
@@ -43,6 +44,12 @@ from .tool_calls import (
 # Proxy hardening: cap request bodies; optional bearer token via env.
 MAX_BODY_BYTES = 1_000_000
 PROXY_TOKEN = os.environ.get("SI_PROXY_TOKEN", "")
+
+# Simple in-process rate limiting (requests per window) to avoid hammering upstream
+RATE_LIMIT_REQUESTS = int(os.environ.get("SI_PROXY_RATE_LIMIT", "60"))
+RATE_LIMIT_WINDOW = int(os.environ.get("SI_PROXY_RATE_WINDOW", "60"))
+_rate_buckets = defaultdict(lambda: deque())
+_rate_lock = threading.Lock()
 
 # How much of a chatgpt reply is held back while checking for the prose
 # refusal ("I can't reach that workspace") that surface produces on some
@@ -165,13 +172,18 @@ def _openai_messages_to_prompt(messages, tools=None, recent_only=False, backend=
 def _resolve_model_from_openai_id(model_id):
     """Map an incoming OpenAI-style model id to a (backend, model) pair.
 
-    The 'chatgpt/' prefix routes to the chatgpt.com backend; everything
-    else (bare aliases, full ids, 'si/...' ids) is claude.ai.  Strip the
-    'si/' prefix first so 'si/chatgpt/auto' still routes to ChatGPT.
+    The 'chatgpt/' prefix routes to the chatgpt.com backend and 'meta/' to
+    meta.ai; everything else (bare aliases, full ids, 'si/...' ids) is
+    claude.ai.  Strip the 'si/' prefix first so 'si/chatgpt/auto' still
+    routes to ChatGPT.
     """
     model_id = model_id.removeprefix("si/")
     if model_id.startswith("chatgpt/"):
         return "chatgpt", model_id.removeprefix("chatgpt/")
+    if model_id.startswith("meta/"):
+        return "meta", model_id.removeprefix("meta/")
+    if model_id in META_MODELS:
+        return "meta", model_id
     return "claude", resolve_model(model_id)
 
 
@@ -183,6 +195,8 @@ def _delete_conversation(backend, creds, conv_id):
         from . import chatgpt_stream
 
         chatgpt_stream.delete_conversation(creds, conv_id)
+    elif backend == "meta":
+        return  # Meta has no delete mutation; the conversation stays in the sidebar
     else:
         from . import http as http_mod
 
@@ -282,6 +296,7 @@ class _Handler(BaseHTTPRequestHandler):
     # Injected by the server factory
     creds = None
     chatgpt_creds = None  # optional second backend; None disables chatgpt/ models
+    meta_creds = None  # optional third backend; None disables meta/ models
     session_registry: dict[tuple, dict] = {}  # (backend, conversation_id) → session_state dict
     registry_lock = threading.Lock()
 
@@ -301,9 +316,35 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(403, "Missing or invalid proxy token")
             return
         if self.path in ("/v1/chat/completions", "/v1/chat/completions/"):
+            if self._rate_limit_check():
+                return
             self._chat_completions()
         else:
             self._not_found()
+
+    def _rate_limit_check(self):
+        if RATE_LIMIT_REQUESTS <= 0:
+            return False
+        client = self.client_address[0] if self.client_address else "local"
+        now = time.time()
+        with _rate_lock:
+            q = _rate_buckets[client]
+            while q and now - q[0] > RATE_LIMIT_WINDOW:
+                q.popleft()
+            if len(q) >= RATE_LIMIT_REQUESTS:
+                retry_after = int(q[0] + RATE_LIMIT_WINDOW - now) + 1
+                body = json.dumps(
+                    {"error": {"message": "Too many requests", "type": "rate_limit_error"}}
+                ).encode()
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Retry-After", str(max(1, retry_after)))
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return True
+            q.append(now)
+        return False
 
     def _authorized(self):
         # Bytes: compare_digest raises on non-ASCII str, and header bytes
@@ -343,6 +384,16 @@ class _Handler(BaseHTTPRequestHandler):
                     "owned_by": "openai",
                 }
                 for slug in CHATGPT_MODELS
+            )
+        if self.meta_creds is not None:
+            models.extend(
+                {
+                    "id": f"meta/{slug}",
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "meta",
+                }
+                for slug in META_MODELS
             )
         body = json.dumps({"object": "list", "data": models}).encode()
         self._send(200, "application/json", body)
@@ -389,6 +440,12 @@ class _Handler(BaseHTTPRequestHandler):
                 "chatgpt backend not configured — run 'python -m si --chatgpt --from-chrome' first",
             )
             return
+        if backend == "meta" and self.meta_creds is None:
+            self._error(
+                400,
+                "meta backend not configured — run 'python -m si --meta --from-chrome' first",
+            )
+            return
         stream = req.get("stream", False)
         tools = req.get("tools") or []
 
@@ -429,7 +486,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self._sync_response(prompt, model, model_id, session_state, tools, backend)
         finally:
             if not conv_key:  # one-shot request: don't leak its conversation
-                creds = self.chatgpt_creds if backend == "chatgpt" else self.creds
+                if backend == "chatgpt":
+                    creds = self.chatgpt_creds
+                elif backend == "meta":
+                    creds = self.meta_creds
+                else:
+                    creds = self.creds
                 _delete_conversation(backend, creds, session_state.get("conv_id"))
 
     def _dispatch(self, backend):
@@ -438,6 +500,10 @@ class _Handler(BaseHTTPRequestHandler):
             from . import chatgpt_stream
 
             return chatgpt_stream.stream_prompt, self.chatgpt_creds
+        if backend == "meta":
+            from . import meta_stream
+
+            return meta_stream.stream_prompt, self.meta_creds
         return claude_stream_prompt, self.creds
 
     def _stream_response(
@@ -628,17 +694,19 @@ class _Handler(BaseHTTPRequestHandler):
 # ── Public API ────────────────────────────────────────────────────────────
 
 
-def run_proxy(creds, port=8765, chatgpt_creds=None):
+def run_proxy(creds, port=8765, chatgpt_creds=None, meta_creds=None):
     """Start the OpenAI-compatible proxy on the given port.
 
     Blocks until interrupted (Ctrl+C).
     Prints the registration commands for Crush and archived opencode.
-    ``chatgpt_creds`` enables the ``chatgpt/``-prefixed models alongside
-    the claude ones; when None only claude models are served.
+    ``chatgpt_creds`` / ``meta_creds`` enable the ``chatgpt/`` and ``meta/``
+    prefixed models alongside the claude ones; when None those backends are
+    disabled.
     """
     # Inject shared state into the handler class
     _Handler.creds = creds
     _Handler.chatgpt_creds = chatgpt_creds
+    _Handler.meta_creds = meta_creds
     _Handler.session_registry = {}
 
     server = ThreadingHTTPServer(("127.0.0.1", port), _Handler)
@@ -654,6 +722,9 @@ def run_proxy(creds, port=8765, chatgpt_creds=None):
     if chatgpt_creds is not None:
         print('\n  ChatGPT models enabled (prefix "chatgpt/", e.g. chatgpt/auto):')
         print('    model add chatgpt/auto --name "ChatGPT (si)" --context-window 200000')
+    if meta_creds is not None:
+        print('\n  Meta AI models enabled (prefix "meta/", e.g. meta/muse-spark):')
+        print('    model add meta/muse-spark --name "Meta AI (si)" --context-window 200000')
     print("\n  Or for archived opencode binary:")
     print(f"    LOCAL_ENDPOINT=http://localhost:{port} opencode")
     print("\n  Press Ctrl+C to stop.\n")

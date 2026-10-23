@@ -7,12 +7,12 @@
 
 </div>
 
-Terminal client for Claude.ai and ChatGPT — replays your own browser session against their internal endpoints and streams replies token-by-token. No API key.
+Terminal client for Claude.ai, ChatGPT, and Meta AI — replays your own browser session against their internal endpoints and streams replies token-by-token. No API key.
 
 > Research tool. It runs under your Claude.ai account: its limits, tiers, and billing still apply. It does not bypass rate limits or paywalls.
 
 > [!WARNING]
-> **Do not use your main account.** si drives claude.ai and chatgpt.com through your own browser session — behavior that can get the account limited or banned. Use a throwaway account you can afford to lose, never one tied to your email, billing, or work.
+> **Do not use your main account.** si drives claude.ai, chatgpt.com, and meta.ai through your own browser session — behavior that can get the account limited or banned. Use a throwaway account you can afford to lose, never one tied to your email, billing, or work.
 
 ## Demo
 
@@ -22,7 +22,7 @@ With the proxy running, `si/haiku` shows up in OpenCode's `/models` picker like 
 
 ## Architecture
 
-si is three thin surfaces — a terminal client, an OpenAI-compatible proxy, and an MCP server — over one pair of streaming backends.
+si is three thin surfaces — a terminal client, an OpenAI-compatible proxy, and an MCP server — over three streaming backends.
 
 ```mermaid
 flowchart TB
@@ -44,6 +44,7 @@ flowchart TB
         direction LR
         claude_be["streaming.py<br/>claude.ai SSE · 429 retry/fallback"]
         chatgpt_be["chatgpt_stream.py<br/>sentinel PoW · SSE patch folding"]
+        meta_be["meta_stream.py<br/>GraphQL warmup · protobuf WebSocket"]
         tools["tool_calls.py<br/>fenced tool-call emulation"]
     end
 
@@ -57,13 +58,15 @@ flowchart TB
         cdp["chrome.py + cdp.py<br/>launch Chrome · extract over CDP"]
         claude_creds["creds.py<br/>Claude session"]
         chatgpt_creds["chatgpt_creds.py<br/>ChatGPT session"]
-        store[("claude_session.json<br/>chatgpt_session.json<br/>0600")]
+        meta_creds["meta_creds.py<br/>Meta AI session"]
+        store[("claude_session.json<br/>chatgpt_session.json<br/>meta_session.json<br/>0600")]
     end
 
     subgraph upstream["Upstream"]
         direction LR
         claude_api["claude.ai internal API"]
         chatgpt_api["chatgpt.com backend API"]
+        meta_api["meta.ai GraphQL + WebSocket"]
     end
 
     term --> cli
@@ -72,31 +75,38 @@ flowchart TB
 
     cli --> claude_be
     cli --> chatgpt_be
+    cli --> meta_be
     proxy --> claude_be
     proxy --> chatgpt_be
+    proxy --> meta_be
     proxy -.->|tools| tools
     mcp --> claude_be
     mcp --> chatgpt_be
+    mcp --> meta_be
 
     claude_be --> http
     http --> claude_api
     chatgpt_be -->|own pinned session| chatgpt_api
+    meta_be -->|own pinned session| meta_api
 
     cookies --> claude_creds
     cookies --> chatgpt_creds
+    cookies --> meta_creds
     cdp --> claude_creds
     claude_creds --> store
     chatgpt_creds --> store
+    meta_creds --> store
     claude_creds -.->|creds| claude_be
     chatgpt_creds -.->|creds| chatgpt_be
+    meta_creds -.->|creds| meta_be
 ```
 
 A request crosses four layers:
 
 1. **Credentials** — `--from-chrome` reads the browser's cookie DB and decrypts it with the OS keyring (`chrome_cookies.py`); `--auto-fetch` launches real Chrome and pulls cookies plus the org id over CDP (`chrome.py`, `cdp.py`). Sessions land in `~/.config/si/*.json` (`0600`). The MCP server re-reads them per call (no restart after re-login); the proxy loads them at startup, so restart it after a re-login.
-2. **Entry points** — `cli.py` parses flags and runs the REPL/one-shot/batch modes; `proxy.py` serves `/v1/models` and `/v1/chat/completions`; `mcp_server.py` answers `tools/call` for `claude_ask` / `chatgpt_ask`. The proxy routes on the model id (`chatgpt/…` → ChatGPT backend, everything else → Claude); the MCP server exposes one tool per backend.
-3. **Backends** — `streaming.py` posts to Claude.ai's completion endpoint and folds SSE deltas, with bounded 429 retry/fallback; `chatgpt_stream.py` runs the sentinel handshake (proof-of-work + Turnstile) and folds ChatGPT's snapshot/patch SSE into text. `tool_calls.py` turns fenced `tool_call` blocks into real OpenAI `tool_calls`, because Claude.ai's native tool channel deadlocks clients that only act on finished responses.
-4. **Transport** — `http.py` keeps one `curl_cffi` session pinned to a Chrome TLS fingerprint, handles retries/backoff, and owns conversation create/delete. The ChatGPT backend keeps its own pinned session so the two fingerprints never mix.
+2. **Entry points** — `cli.py` parses flags and runs the REPL/one-shot/batch modes; `proxy.py` serves `/v1/models` and `/v1/chat/completions`; `mcp_server.py` answers `tools/call` for `claude_ask` / `chatgpt_ask` / `meta_ask`. The proxy routes on the model id (`chatgpt/…` → ChatGPT, `meta/…` → Meta AI, everything else → Claude); the MCP server exposes one tool per backend.
+3. **Backends** — `streaming.py` posts to Claude.ai's completion endpoint and folds SSE deltas, with bounded 429 retry/fallback; `chatgpt_stream.py` runs the sentinel handshake (proof-of-work + Turnstile) and folds ChatGPT's snapshot/patch SSE into text; `meta_stream.py` warms a conversation over GraphQL and sends it over Meta's protobuf WebSocket. `tool_calls.py` turns fenced `tool_call` blocks into real OpenAI `tool_calls`, because Claude.ai's native tool channel deadlocks clients that only act on finished responses.
+4. **Transport** — `http.py` keeps one `curl_cffi` session pinned to a Chrome TLS fingerprint, handles retries/backoff, and owns conversation create/delete. The ChatGPT and Meta AI backends keep their own pinned sessions so the fingerprints never mix.
 
 Conversation state is one server-side chat per client session: the CLI/TUI delete it on exit when stealth is on, the proxy keys it by `X-Conversation-Id` (deleting one-shot chats), and the MCP server keeps one per provider for its lifetime.
 
@@ -132,6 +142,16 @@ python -m si --chatgpt --clear-session # delete stored chatgpt creds
 ```
 
 Saves to `~/.config/si/chatgpt_session.json` (`600`). The proxy and MCP server pick these up automatically; a `chatgpt/`-prefixed model then appears alongside the claude ones. Re-run `--chatgpt --from-chrome` when requests come back `401`.
+
+### Meta AI credentials
+
+```bash
+python -m si --meta --from-chrome     # steal meta.ai session from Chrome
+python -m si --meta --manual          # or paste the ecto_1_sess cookie value
+python -m si --meta --clear-session   # delete stored meta creds
+```
+
+Saves to `~/.config/si/meta_session.json` (`600`). si fetches the short-lived `ecto1:…` WebSocket token from meta.ai itself, solving its anonymous JS challenge over plain HTTP — no browser is launched. A `meta/`-prefixed model then appears alongside the other providers. Re-run `--meta --from-chrome` when requests stop returning text.
 
 ## Chat
 
@@ -174,6 +194,17 @@ curl http://localhost:8765/v1/chat/completions \
 
 Multi-turn memory works the same way: send an `X-Conversation-Id` header and turns share one ChatGPT conversation (the OpenAI `user` field is not used — it identifies an end user, not a conversation). Conversation state is keyed per backend, so reusing one key across `si/` and `chatgpt/` models keeps them separate. Requests without the header are independent, and their server-side conversation is deleted afterwards. Tool calling, streaming, and the `429`-surfaces-as-error behavior all apply. Without stored ChatGPT credentials, a `chatgpt/` request returns a clear `400` instead.
 
+### Meta AI models
+
+With Meta AI credentials stored, the same proxy serves `meta/muse-spark`, `meta/muse-spark-thinking`, and `meta/muse-spark-contemplating`. The `thinking` and `contemplating` slugs both map to Meta's `think_hard` mode. `X-Conversation-Id` keeps multi-turn context; without it each request is one-shot. Meta exposes no delete mutation, so its server-side conversations stay in the meta.ai sidebar — the proxy's cleanup path is a deliberate no-op.
+
+```bash
+curl http://localhost:8765/v1/chat/completions \
+  -d '{"model": "meta/muse-spark", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+Without stored Meta credentials, a `meta/` request returns a clear `400` instead.
+
 Requests carry a fallback account id in the sentinel headers for sessions where the auth endpoint doesn't supply one. Set `SI_CHATGPT_ACCOUNT_ID` to your own; it is unverified for other accounts — if a fresh free account hits unexplained sentinel rejections, start there. When the sentinel doesn't mint a Turnstile token, si reads a captured one from `SI_CHATGPT_TURNSTILE` or `~/.config/si/chatgpt_turnstile.txt`; the token is session data and is not committed.
 
 **Tool calling works.** OpenAI `tools` are emulated in text: the proxy appends the tool specs to the prompt, asks the model to emit fenced `tool_call` blocks, and converts them into real OpenAI `tool_calls` in the response. Send the results back as `tool` messages on the next request and the model continues. (Claude.ai's native tool channel keeps the stream open waiting for a result, which deadlocks clients that act only on finished responses — so the proxy doesn't use it.) For the `chatgpt/` backend the protocol block leads the prompt, since that surface otherwise answers "I can't reach that workspace" instead of emitting a fence; a tools-bearing reply that still opens with such a refusal is retried once in a fresh conversation before it is shown.
@@ -203,7 +234,7 @@ With the proxy running, `si/sonnet`, `si/haiku`, and `si/opus` appear in OpenCod
 
 ## OpenCode MCP server
 
-Expose si to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`, `chatgpt_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai or ChatGPT through si when you ask.
+Expose si to [OpenCode](https://opencode.ai) as a native tool (`claude_ask`, `chatgpt_ask`, `meta_ask`) without making it your model provider — OpenCode keeps its own tool-capable model and can call Claude.ai, ChatGPT, or Meta AI through si when you ask.
 
 Install it with one command, run from this checkout:
 
@@ -213,7 +244,7 @@ python -m si --opencode
 
 That calls OpenCode's own `opencode mcp add`, so your existing config (comments included) is preserved. Restart OpenCode, then check `opencode mcp list`.
 
-Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts aliases (`sonnet`, `haiku`, `opus`) or a full model id. `chatgpt_ask(prompt, model="auto")` does the same through ChatGPT (needs ChatGPT credentials stored; `model` takes a chatgpt.com slug like `auto`, `gpt-6`, `gpt-6-mini`).
+Your model can then call `claude_ask(prompt, model="sonnet")`; `model` accepts aliases (`sonnet`, `haiku`, `opus`) or a full model id. `chatgpt_ask(prompt, model="auto")` does the same through ChatGPT (needs ChatGPT credentials stored; `model` takes a chatgpt.com slug like `auto`, `gpt-6`, `gpt-6-mini`). `meta_ask(prompt, model="muse-spark")` goes through Meta AI (needs Meta credentials; `model` takes `muse-spark`, `muse-spark-thinking`, or `muse-spark-contemplating`).
 
 <details>
 <summary>Or add it by hand</summary>
@@ -244,10 +275,10 @@ printf '{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n' | .venv/bin/python -m 
 
 Notes:
 
-- **Shared conversations.** All `claude_ask` calls reuse one Claude.ai conversation, and all `chatgpt_ask` calls one ChatGPT conversation, for the server's lifetime, so follow-ups keep context. Neither is stealth-deleted and both appear in the respective sidebar until you remove them.
+- **Shared conversations.** All `claude_ask` calls reuse one Claude.ai conversation, all `chatgpt_ask` calls one ChatGPT conversation, and all `meta_ask` calls one Meta AI conversation, for the server's lifetime, so follow-ups keep context. None is stealth-deleted and all appear in the respective sidebar until you remove them (Meta has no delete option).
 - **Diagnostics on stderr.** si's progress/error output goes to stderr, so it never corrupts the MCP protocol stream on stdout.
-- **Limitations.** Text-only passthrough — no image output, and no tool calls come back. Requests run under your own accounts, so plan limits apply. One call can take up to the HTTP timeout (120 s), longer under rate limiting. `chatgpt_ask` errors cleanly when ChatGPT credentials are missing or the turn is refused (quota, rate limit).
-- **Troubleshooting.** `Session invalid or expired` → re-run `python -m si --auto-fetch` (Claude) or `--chatgpt --from-chrome` (ChatGPT); the next call picks up the new credentials (no restart needed). If the tool is missing, check OpenCode's MCP logs and that the venv path in `command` is absolute and correct.
+- **Limitations.** Text-only passthrough — no image output, and no tool calls come back. Requests run under your own accounts, so plan limits apply. One call can take up to the HTTP timeout (120 s), longer under rate limiting. `chatgpt_ask` and `meta_ask` error cleanly when credentials are missing or the turn is refused (quota, rate limit).
+- **Troubleshooting.** `Session invalid or expired` → re-run `python -m si --auto-fetch` (Claude), `--chatgpt --from-chrome` (ChatGPT), or `--meta --from-chrome` (Meta AI); the next call picks up the new credentials (no restart needed). If the tool is missing, check OpenCode's MCP logs and that the venv path in `command` is absolute and correct.
 
 ## More flags
 
@@ -260,17 +291,18 @@ Notes:
 | `Session invalid or expired` | re-run `--from-chrome` or `--auto-fetch` |
 | ChatGPT `401` / no accessToken | re-run `--chatgpt --from-chrome` |
 | ChatGPT `prepare`/`finalize` failed | the sentinel handshake changed upstream; update si |
+| Meta AI no text / WS timeout | re-run `--meta --from-chrome`; the session or WS token expired |
 | `429` rate limited | wait, or switch model (`/model haiku` in the CLI/TUI) |
 | `ConnectionRefused` on every model | proxy not running — start `python -m si --proxy`, or `--install-service` on macOS |
 | Keychain prompt | click **Always Allow**, retry |
 
 ## Security
 
-Your `sessionKey` and ChatGPT session token are passwords: never share, upload, or commit the credential files. `--clear-session` (and `--chatgpt --clear-session`) when done; if exposed, log out in the browser to invalidate them.
+Your `sessionKey`, ChatGPT session token, and Meta AI `ecto_1_sess` cookie are passwords: never share, upload, or commit the credential files. `--clear-session` (and `--chatgpt --clear-session` / `--meta --clear-session`) when done; if exposed, log out in the browser to invalidate them.
 
 The proxy listens on `127.0.0.1` with no authentication unless `SI_PROXY_TOKEN` is set. On a shared Mac, another local user or process that can reach port 8765 can spend your account's quota; set the token (and give it to the client) or keep the proxy off when not in use. The macOS LaunchAgent plist is written `600` because it carries the token when one is set.
 
-The ChatGPT backend drives chatgpt.com's internal API with your own browser session. That is against OpenAI's terms of service and can get the account limited or banned — use a throwaway account, at your own risk.
+The ChatGPT backend drives chatgpt.com's internal API and the Meta AI backend drives meta.ai's GraphQL/WebSocket surface with your own browser session. That is against those services' terms and can get the account limited or banned — use a throwaway account, at your own risk.
 
 ## Dev
 

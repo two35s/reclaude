@@ -58,17 +58,22 @@ def test_ping_returns_empty_result():
 # ── discovery ───────────────────────────────────────────────────────────────
 
 
-def test_tools_list_exposes_both_schemas():
+def test_tools_list_exposes_all_schemas():
     resp = handle_message({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     tools = resp["result"]["tools"]
-    assert [t["name"] for t in tools] == ["claude_ask", "chatgpt_ask"]
-    claude_schema, chatgpt_schema = tools
+    assert [t["name"] for t in tools] == ["claude_ask", "chatgpt_ask", "meta_ask"]
+    claude_schema, chatgpt_schema, meta_schema = tools
     assert claude_schema["inputSchema"]["required"] == ["prompt"]
     assert claude_schema["inputSchema"]["properties"]["model"]["default"] == "sonnet"
     assert chatgpt_schema["inputSchema"]["required"] == ["prompt"]
     assert (
         chatgpt_schema["inputSchema"]["properties"]["model"]["default"]
         == mcp_server.CHATGPT_DEFAULT_MODEL
+    )
+    assert meta_schema["inputSchema"]["required"] == ["prompt"]
+    assert (
+        meta_schema["inputSchema"]["properties"]["model"]["default"]
+        == mcp_server.META_DEFAULT_MODEL
     )
 
 
@@ -145,6 +150,38 @@ def test_chatgpt_ask_uses_caller_model():
         ask_chatgpt=ask_chatgpt,
     )
     assert seen["model"] == "gpt-6"
+
+
+def test_meta_ask_dispatches_to_meta_backend():
+    seen = {}
+
+    def ask_meta(prompt, model):
+        seen.update(prompt=prompt, model=model)
+        return "meta reply", None
+
+    resp = handle_message(
+        _call(12, {"prompt": "hi"}, name="meta_ask"),
+        ask=_ask_ok("never"),
+        ask_meta=ask_meta,
+    )
+    assert resp["result"]["isError"] is False
+    assert resp["result"]["content"][0]["text"] == "meta reply"
+    assert seen == {"prompt": "hi", "model": mcp_server.META_DEFAULT_MODEL}
+
+
+def test_meta_ask_uses_caller_model():
+    seen = {}
+
+    def ask_meta(prompt, model):
+        seen["model"] = model
+        return "ok", None
+
+    handle_message(
+        _call(13, {"prompt": "p", "model": "muse-spark-thinking"}, name="meta_ask"),
+        ask=_ask_ok("never"),
+        ask_meta=ask_meta,
+    )
+    assert seen["model"] == "muse-spark-thinking"
 
 
 def test_unknown_method_is_error():

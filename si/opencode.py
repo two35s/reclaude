@@ -12,7 +12,14 @@ import shutil
 import subprocess
 import sys
 
-from .config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR, MODEL_ALIASES
+from .config import (
+    CHATGPT_CRED_FILE,
+    CHATGPT_DEFAULT_MODEL,
+    DIR,
+    META_CRED_FILE,
+    META_MODELS,
+    MODEL_ALIASES,
+)
 
 NAME = "si"  # MCP server name, provider id, and model prefix
 PICKER_MODELS = ("sonnet", "haiku", "opus")
@@ -47,8 +54,8 @@ def global_config_path():
 def provider_block(port=8765):
     """The `providers` entry that exposes the running proxy as OpenCode models.
 
-    The ChatGPT model is included only when chatgpt credentials are stored,
-    since the proxy rejects ``chatgpt/`` requests without them.
+    ChatGPT and Meta AI models are included only when their credentials are
+    stored, since the proxy rejects those prefixed requests without them.
     """
     models = {
         alias: {"name": f"Claude {alias.capitalize()}", "modelID": f"{NAME}/{alias}"}
@@ -56,6 +63,14 @@ def provider_block(port=8765):
     }
     if os.path.exists(CHATGPT_CRED_FILE):
         models["chatgpt"] = {"name": "ChatGPT", "modelID": f"chatgpt/{CHATGPT_DEFAULT_MODEL}"}
+    if os.path.exists(META_CRED_FILE):
+        for m in META_MODELS:
+            if m == "muse-spark":
+                models[m] = {"name": "Meta Muse Spark", "modelID": f"{NAME}/{m}"}
+            elif m == "muse-spark-thinking":
+                models[m] = {"name": "Meta Muse Spark Thinking", "modelID": f"{NAME}/{m}"}
+            else:
+                models[m] = {"name": "Meta Muse Spark Contemplating", "modelID": f"{NAME}/{m}"}
     return {
         "providers": {
             NAME: {

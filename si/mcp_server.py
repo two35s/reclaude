@@ -1,4 +1,4 @@
-"""Minimal stdlib-only MCP (stdio) server exposing `claude_ask` and `chatgpt_ask`.
+"""Minimal stdlib-only MCP (stdio) server exposing `claude_ask`, `chatgpt_ask`, `meta_ask`.
 
 Speaks newline-delimited JSON-RPC 2.0 on stdin/stdout, per the Model Context
 Protocol stdio transport. The real stdout is reserved for protocol messages;
@@ -14,7 +14,13 @@ import sys
 import threading
 
 from . import __version__
-from .config import CHATGPT_DEFAULT_MODEL, CHATGPT_MODELS, resolve_model
+from .config import (
+    CHATGPT_DEFAULT_MODEL,
+    CHATGPT_MODELS,
+    META_DEFAULT_MODEL,
+    META_MODELS,
+    resolve_model,
+)
 from .creds import CredentialManager
 from .streaming import stream_prompt
 
@@ -28,12 +34,14 @@ SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18", "2025-1
 
 TOOL_NAME = "claude_ask"
 CHATGPT_TOOL_NAME = "chatgpt_ask"
+META_TOOL_NAME = "meta_ask"
 DEFAULT_MODEL_ALIAS = "sonnet"
 
 # One backend conversation per provider for the server's whole lifetime
 # (shared memory), and a lock so concurrent calls cannot interleave writes.
 _session = {"conv_id": None, "created": False}
 _chatgpt_session = {"conv_id": None, "created": False}
+_meta_session = {"conv_id": None, "created": False}
 _lock = threading.Lock()
 
 
@@ -54,6 +62,16 @@ def _load_chatgpt_creds():
         raise RuntimeError(
             "No valid ChatGPT credentials. Run: python -m si --chatgpt --from-chrome"
         )
+    return creds
+
+
+def _load_meta_creds():
+    """Load Meta AI credentials from disk (no caching, so re-login takes effect)."""
+    from .meta_creds import MetaCredentials
+
+    creds = MetaCredentials()
+    if not creds.load() or not creds.is_valid():
+        raise RuntimeError("No valid Meta AI credentials. Run: python -m si --meta --from-chrome")
     return creds
 
 
@@ -109,6 +127,36 @@ def run_chatgpt(prompt, model):
     if text is None:
         return None, (
             "No response from ChatGPT (expired session, rate limit, or turn "
+            "refused). See the MCP server's stderr for the reason."
+        )
+    return text, None
+
+
+def run_meta(prompt, model):
+    """Call the Meta AI backend. Returns (text, None) or (None, error_message)."""
+    from . import meta_stream
+
+    try:
+        creds = _load_meta_creds()
+    except RuntimeError as e:
+        return None, str(e)
+    if model not in META_MODELS:
+        return None, f"Unknown Meta AI model {model!r}. Available: {', '.join(META_MODELS)}"
+    with _lock:  # serialize: the shared conversation state is not reentrant
+        try:
+            text = meta_stream.stream_prompt(
+                creds,
+                prompt,
+                model=model,
+                stealth=False,
+                session_state=_meta_session,
+                on_text=lambda _t: None,  # suppress live echo; result is returned below
+            )
+        except Exception as e:
+            return None, f"backend error: {e}"
+    if text is None:
+        return None, (
+            "No response from Meta AI (expired session, rate limit, or turn "
             "refused). See the MCP server's stderr for the reason."
         )
     return text, None
@@ -176,10 +224,24 @@ def _chatgpt_schema():
     )
 
 
-def _handle_tools_call(mid, params, ask, ask_chatgpt=run_chatgpt):
+def _meta_schema():
+    return _tool_schema(
+        META_TOOL_NAME,
+        "Ask Meta AI (through the local si browser session) a question "
+        "and return its text reply. Use it for a second opinion or when the "
+        "user asks for Meta AI specifically.",
+        "The question or instruction to send to Meta AI.",
+        f"Meta AI model slug. Available: {', '.join(META_MODELS)}.",
+        META_DEFAULT_MODEL,
+    )
+
+
+def _handle_tools_call(mid, params, ask, ask_chatgpt=run_chatgpt, ask_meta=run_meta):
     name = params.get("name")
     if name == CHATGPT_TOOL_NAME:
         runner, default_model = ask_chatgpt, CHATGPT_DEFAULT_MODEL
+    elif name == META_TOOL_NAME:
+        runner, default_model = ask_meta, META_DEFAULT_MODEL
     elif name == TOOL_NAME:
         runner, default_model = ask, DEFAULT_MODEL_ALIAS
     else:
@@ -203,7 +265,7 @@ def _handle_tools_call(mid, params, ask, ask_chatgpt=run_chatgpt):
     return _tool_text(mid, text)
 
 
-def handle_message(msg, ask=run_claude, ask_chatgpt=run_chatgpt):
+def handle_message(msg, ask=run_claude, ask_chatgpt=run_chatgpt, ask_meta=run_meta):
     """Handle one decoded JSON-RPC message.
 
     Returns a response dict, or None for notifications / messages needing no reply.
@@ -231,12 +293,12 @@ def handle_message(msg, ask=run_claude, ask_chatgpt=run_chatgpt):
     if method == "ping":
         return _result(mid, {})
     if method == "tools/list":
-        return _result(mid, {"tools": [_claude_schema(), _chatgpt_schema()]})
+        return _result(mid, {"tools": [_claude_schema(), _chatgpt_schema(), _meta_schema()]})
     if method == "tools/call":
         params = msg.get("params")
         if not isinstance(params, dict):
             return _error(mid, -32602, "Invalid params")
-        return _handle_tools_call(mid, params, ask, ask_chatgpt)
+        return _handle_tools_call(mid, params, ask, ask_chatgpt, ask_meta)
 
     if mid is None:
         return None  # unknown notification: ignore
@@ -251,7 +313,7 @@ def _write(obj, out):
     out.flush()
 
 
-def serve(instream, outstream, ask=run_claude, ask_chatgpt=run_chatgpt):
+def serve(instream, outstream, ask=run_claude, ask_chatgpt=run_chatgpt, ask_meta=run_meta):
     """Read newline-delimited JSON-RPC from ``instream``, write replies to ``outstream``.
 
     sys.stdout is redirected to stderr for the duration so si's own prints
@@ -270,7 +332,7 @@ def serve(instream, outstream, ask=run_claude, ask_chatgpt=run_chatgpt):
             except json.JSONDecodeError:
                 _write(_error(None, -32700, "Parse error"), outstream)
                 continue
-            response = handle_message(msg, ask, ask_chatgpt)
+            response = handle_message(msg, ask, ask_chatgpt, ask_meta)
             if response is not None:
                 _write(response, outstream)
     finally:

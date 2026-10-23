@@ -70,6 +70,14 @@ def test_chatgpt_model_id_mapping():
     assert _resolve_model_from_openai_id("si/chatgpt/auto") == ("chatgpt", "auto")
 
 
+def test_meta_model_id_mapping():
+    assert _resolve_model_from_openai_id("meta/muse-spark") == ("meta", "muse-spark")
+    assert _resolve_model_from_openai_id("si/meta/muse-spark-thinking") == (
+        "meta",
+        "muse-spark-thinking",
+    )
+
+
 def test_stream_response_sends_error_chunk_when_upstream_fails(monkeypatch):
     # Regression guard for issue #3: a failed upstream must not read as an
     # empty 200 with finish_reason stop.
@@ -130,6 +138,57 @@ def test_stream_response_routes_chatgpt_backend(monkeypatch):
 
     assert seen["creds"] is handler.chatgpt_creds
     assert "hello from chatgpt" in handler.wfile.getvalue().decode()
+
+
+def test_stream_response_routes_meta_backend(monkeypatch):
+    # meta/ models must reach the meta backend, never claude or chatgpt.
+    import io
+
+    import si.meta_stream as meta_mod
+    import si.proxy as proxy_mod
+
+    handler = object.__new__(proxy_mod._Handler)
+    handler.wfile = io.BytesIO()
+    handler.send_response = lambda *a, **k: None
+    handler.send_header = lambda *a, **k: None
+    handler.end_headers = lambda *a, **k: None
+    handler.creds = None
+    handler.chatgpt_creds = None
+    handler.meta_creds = object()
+
+    seen = {}
+
+    def fake_meta(creds, prompt, **kwargs):
+        seen["creds"] = creds
+        kwargs["on_text"]("hello from meta")
+        return "hello from meta"
+
+    def wrong_backend(*a, **k):
+        raise AssertionError("only the meta backend may receive meta/ models")
+
+    monkeypatch.setattr(proxy_mod, "claude_stream_prompt", wrong_backend)
+    monkeypatch.setattr(meta_mod, "stream_prompt", fake_meta)
+    handler._stream_response("hi", "muse-spark", "meta/muse-spark", {}, backend="meta")
+
+    assert seen["creds"] is handler.meta_creds
+    assert "hello from meta" in handler.wfile.getvalue().decode()
+
+
+def test_models_list_includes_meta_only_with_creds():
+    import si.proxy as proxy_mod
+
+    handler = object.__new__(proxy_mod._Handler)
+    captured = {}
+    handler._send = lambda code, ctype, body: captured.update(body=json.loads(body))
+    handler.chatgpt_creds = None
+    handler.meta_creds = None
+    handler._list_models()
+    assert not any(m["id"].startswith("meta/") for m in captured["body"]["data"])
+
+    handler.meta_creds = object()
+    handler._list_models()
+    ids = {m["id"] for m in captured["body"]["data"]}
+    assert {"meta/muse-spark", "meta/muse-spark-thinking"} <= ids
 
 
 def test_refusal_detection_stays_inside_the_hold_window():

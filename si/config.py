@@ -27,9 +27,11 @@ if os.name != "nt":
     os.chmod(_CONFIG_DIR, 0o700)
 CRED_FILE = os.path.join(_CONFIG_DIR, "claude_session.json")
 CHATGPT_CRED_FILE = os.path.join(_CONFIG_DIR, "chatgpt_session.json")
+META_CRED_FILE = os.path.join(_CONFIG_DIR, "meta_session.json")
 
 URL_BASE = "https://claude.ai"
 CHATGPT_URL_BASE = "https://chatgpt.com"
+META_URL_BASE = "https://www.meta.ai"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
@@ -82,6 +84,11 @@ COOKIE_SITES = {
         "session_cookie": "__Secure-next-auth.session-token",
         "label": "chatgpt.com",
     },
+    "meta": {
+        "host_patterns": ("meta.ai", ".meta.ai"),
+        "session_cookie": "ecto_1_sess",
+        "label": "meta.ai",
+    },
 }
 
 # ChatGPT constants. TLS impersonation must match the declared UA, so both
@@ -113,6 +120,25 @@ CHATGPT_MODELS = (
     "gpt-6-mini",
     "gpt-6-t-mini-mini",
 )
+
+# Meta AI constants
+META_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+)
+META_IMPERSONATE = "chrome150"
+META_DEFAULT_MODEL = "muse-spark"
+META_MODELS = ("muse-spark", "muse-spark-thinking", "muse-spark-contemplating")
+META_MODEL_MODES = {
+    "muse-spark": "think_fast",
+    "muse-spark-thinking": "think_hard",
+    "muse-spark-contemplating": "think_hard",
+}
+
+# Add Meta models as pass-through aliases so they work like regular models
+for _m in META_MODELS:
+    MODEL_ALIASES[_m] = _m
+del _m
 
 # Sentinel proof-of-work: the answer must satisfy
 # sha3_512(seed + answer)[:len(difficulty)] <= bytes.fromhex(difficulty).

@@ -3,7 +3,12 @@
 import sys
 
 from si import opencode
-from si.config import CHATGPT_CRED_FILE, CHATGPT_DEFAULT_MODEL, DIR
+from si.config import (
+    CHATGPT_CRED_FILE,
+    CHATGPT_DEFAULT_MODEL,
+    DIR,
+    META_CRED_FILE,
+)
 
 
 def test_mcp_argv_pins_interpreter_and_checkout():
@@ -29,6 +34,22 @@ def test_provider_block_matches_proxy_models(monkeypatch):
     block = opencode.provider_block(port=9000)["providers"]["si"]
     assert set(block["models"]) == {"sonnet", "haiku", "opus", "chatgpt"}
     assert block["models"]["chatgpt"]["modelID"] == f"chatgpt/{CHATGPT_DEFAULT_MODEL}"
+
+    # and with stored meta creds the meta models join too
+    monkeypatch.setattr(
+        opencode.os.path, "exists", lambda p: p in (CHATGPT_CRED_FILE, META_CRED_FILE)
+    )
+    block = opencode.provider_block(port=9000)["providers"]["si"]
+    assert set(block["models"]) == {
+        "sonnet",
+        "haiku",
+        "opus",
+        "chatgpt",
+        "muse-spark",
+        "muse-spark-thinking",
+        "muse-spark-contemplating",
+    }
+    assert block["models"]["muse-spark"]["modelID"] == "si/muse-spark"
 
 
 def test_install_without_opencode_prints_command_and_spawns_nothing(monkeypatch, capsys):

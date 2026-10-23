@@ -21,6 +21,19 @@ def _inline_creds_conflict(creds, org_id):
 DEFAULT_BATCH_DELAY = 2
 
 
+def _run_proxy(creds, port):
+    """Start the proxy with every provider whose credentials are stored."""
+    from .chatgpt_creds import ChatGPTCredentials
+    from .meta_creds import MetaCredentials
+    from .proxy import run_proxy
+
+    cg = ChatGPTCredentials()
+    cg = cg if cg.load() else None
+    mc = MetaCredentials()
+    mc = mc if mc.load() else None
+    run_proxy(creds, port=port, chatgpt_creds=cg, meta_creds=mc)
+
+
 def main():
     print()
     print("  ╔════════════════════════════════════════════════════╗")
@@ -44,6 +57,11 @@ def main():
         "--chatgpt",
         action="store_true",
         help="With --from-chrome/--manual: store ChatGPT credentials instead of Claude",
+    )
+    ap.add_argument(
+        "--meta",
+        action="store_true",
+        help="With --from-chrome/--manual: store Meta AI credentials instead of Claude",
     )
     ap.add_argument("--prompt", type=str, help="Single prompt to send")
     ap.add_argument(
@@ -101,6 +119,11 @@ def main():
 
             ChatGPTCredentials().clear()
             return
+        if args.meta:
+            from .meta_creds import MetaCredentials
+
+            MetaCredentials().clear()
+            return
         creds = CredentialManager()
         creds.clear()
         return
@@ -111,49 +134,55 @@ def main():
         return
 
     # ── Credential resolution ────────────────────────────
-    # --chatgpt only acquires credentials; the proxy/MCP surfaces read them
-    # from disk, so there is no chatgpt REPL to fall through to.
-    if args.chatgpt:
-        from .chatgpt_creds import ChatGPTCredentials
+    # --chatgpt/--meta only acquire credentials; the proxy/MCP surfaces read
+    # them from disk, so there is no provider REPL to fall through to.
+    if args.chatgpt or args.meta:
+        if args.meta:
+            from . import meta_stream as provider_stream
+            from .config import META_DEFAULT_MODEL, META_MODELS
+            from .meta_creds import MetaCredentials as ProviderCredentials
 
-        cg = ChatGPTCredentials()
+            label, flag = "Meta AI", "--meta"
+        else:
+            from . import chatgpt_stream as provider_stream
+            from .chatgpt_creds import ChatGPTCredentials as ProviderCredentials
+            from .config import CHATGPT_DEFAULT_MODEL, CHATGPT_MODELS
+
+            label, flag = "ChatGPT", "--chatgpt"
+        models = META_MODELS if args.meta else CHATGPT_MODELS
+        default_model = META_DEFAULT_MODEL if args.meta else CHATGPT_DEFAULT_MODEL
+
+        pc = ProviderCredentials()
         if args.from_chrome is not None:
-            ok = cg.from_chrome(args.from_chrome or None)
+            ok = pc.from_chrome(args.from_chrome or None)
         elif args.manual:
-            ok = cg.manual_input()
+            ok = pc.manual_input()
         elif args.prompt or args.proxy:
-            ok = cg.load()
+            ok = pc.load()
             if not ok:
-                print(
-                    "[!] No ChatGPT credentials. Use --chatgpt --from-chrome or --chatgpt --manual"
-                )
+                print(f"[!] No {label} credentials. Use {flag} --from-chrome or {flag} --manual")
                 return
         else:
-            print("[!] --chatgpt needs an action: --from-chrome, --manual, --proxy, or --prompt")
+            print(f"[!] {flag} needs an action: --from-chrome, --manual, --proxy, or --prompt")
             return
         if not ok:
-            print("[!] ChatGPT credential acquisition failed")
+            print(f"[!] {label} credential acquisition failed")
             return
         if args.proxy:
-            from .proxy import run_proxy
-
             creds = CredentialManager()
             if not creds.load() or not creds.is_valid():
                 print("[!] Proxy needs valid Claude credentials too (claude models are required).")
                 return
-            run_proxy(creds, port=args.port, chatgpt_creds=cg)
+            _run_proxy(creds, args.port)
             return
         if args.prompt:
-            from . import chatgpt_stream
-            from .config import CHATGPT_DEFAULT_MODEL, CHATGPT_MODELS
-
             # --model defaults to the claude alias "sonnet"; only a real
-            # chatgpt slug the user typed is passed through.
-            model = args.model if args.model in CHATGPT_MODELS else CHATGPT_DEFAULT_MODEL
+            # provider slug the user typed is passed through.
+            model = args.model if args.model in models else default_model
             session = {"conv_id": None, "created": False}
             try:
-                chatgpt_stream.stream_prompt(
-                    cg,
+                provider_stream.stream_prompt(
+                    pc,
                     args.prompt,
                     model=model,
                     stealth=not args.no_stealth,
@@ -161,9 +190,9 @@ def main():
                 )
             finally:
                 # Cleanup on failure too: the conversation may exist even
-                # when the turn 429'd or was refused.
+                # when the turn was refused or timed out.
                 if not args.no_stealth and session.get("created"):
-                    chatgpt_stream.delete_conversation(cg, session["conv_id"])
+                    provider_stream.delete_conversation(pc, session["conv_id"])
             return
         return
 
@@ -215,14 +244,8 @@ def main():
 
     # OpenAI-compatible proxy mode (for Crush / archived opencode integration).
     if args.proxy:
-        # ChatGPT models are served alongside claude ones when stored.
-        from .chatgpt_creds import ChatGPTCredentials
-        from .proxy import run_proxy
-
-        cg = ChatGPTCredentials()
-        if not cg.load():
-            cg = None
-        run_proxy(creds, port=args.port, chatgpt_creds=cg)
+        # ChatGPT and Meta models are served alongside claude ones when stored.
+        _run_proxy(creds, args.port)
         return
 
     # Session state: tracks the current conversation for memory
